@@ -26,6 +26,13 @@ pub trait Language: Send + Sync {
 
     /// Stem a term. Return the term unchanged if no stemming is needed.
     fn stem(&self, term: &str) -> String;
+
+    /// Characters that separate query terms in the query lexer.
+    ///
+    /// These should match the separators used by [`Language::tokenize`].
+    fn separator_chars(&self) -> &str {
+        " \t\n\r\x0C\x0B\x0D\u{00A0}"
+    }
 }
 
 /// A language handle used throughout the engine.

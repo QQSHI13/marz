@@ -342,7 +342,9 @@ impl Index {
     /// Supports `+` required, `-` prohibited, `field:term`, `term^boost`,
     /// `term~edits`, and `*` wildcards.
     pub fn search(&self, query_string: &str) -> Result<Vec<SearchResult>, QueryParseError> {
-        let query = parse_query(query_string, &self.fields)?;
+        let language = self.pipeline.language();
+        let separators = language.separator_chars();
+        let query = parse_query(query_string, &self.fields, separators)?;
         Ok(self.execute_query(&query))
     }
 

@@ -15,6 +15,11 @@ impl Pipeline {
         Self { language }
     }
 
+    /// Return the language used by this pipeline.
+    pub fn language(&self) -> LanguageRef {
+        self.language.clone()
+    }
+
     /// Run the default indexing pipeline: trim, stop-word filter, stem.
     pub fn run_index(&self, tokens: Vec<Token>) -> Vec<Token> {
         let mut output = Vec::new();

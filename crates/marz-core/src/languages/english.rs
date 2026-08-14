@@ -36,6 +36,10 @@ impl Language for English {
     fn stem(&self, term: &str) -> String {
         porter_stem(term)
     }
+
+    fn separator_chars(&self) -> &str {
+        " \t\n\r\x0C\x0B\x0D\u{00A0}-"
+    }
 }
 
 fn is_word_char(c: char) -> bool {

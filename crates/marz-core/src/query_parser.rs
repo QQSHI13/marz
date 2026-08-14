@@ -53,18 +53,20 @@ struct Lexeme {
 }
 
 /// Lexer for lunr query syntax.
-struct QueryLexer {
+struct QueryLexer<'a> {
     chars: Vec<char>,
+    separators: &'a str,
     lexemes: Vec<Lexeme>,
     pos: usize,
     start: usize,
     escape_positions: Vec<usize>,
 }
 
-impl QueryLexer {
-    fn new(input: &str) -> Self {
+impl<'a> QueryLexer<'a> {
+    fn new(input: &str, separators: &'a str) -> Self {
         Self {
             chars: input.chars().collect(),
+            separators,
             lexemes: Vec::new(),
             pos: 0,
             start: 0,
@@ -156,9 +158,7 @@ impl QueryLexer {
     }
 
     fn is_separator(&self, ch: char) -> bool {
-        // Matches the default separator set used by the English tokenizer.
-        // This is intentionally simple; language-specific lexers can override.
-        ch.is_whitespace() || ch == '-'
+        self.separators.contains(ch)
     }
 
     fn lex_text(&mut self) -> Option<LexState> {
@@ -266,8 +266,11 @@ pub struct QueryParser<'a> {
 
 impl<'a> QueryParser<'a> {
     /// Create a parser for `query_string` that will append clauses to `query`.
-    pub fn new(query_string: &str, query: &'a mut Query) -> Self {
-        let mut lexer = QueryLexer::new(query_string);
+    ///
+    /// `separators` is the set of characters that split query terms and should
+    /// match the tokenizer of the target language.
+    pub fn new(query_string: &str, query: &'a mut Query, separators: &str) -> Self {
+        let mut lexer = QueryLexer::new(query_string, separators);
         lexer.run();
         Self {
             query,
@@ -546,9 +549,16 @@ enum ParseState {
 }
 
 /// Parse a query string against the given fields.
-pub fn parse_query(query_string: &str, all_fields: &[String]) -> Result<Query, QueryParseError> {
+///
+/// `separators` defines which characters split query terms and should match the
+/// language tokenizer (see [`Language::separator_chars`](crate::language::Language)).
+pub fn parse_query(
+    query_string: &str,
+    all_fields: &[String],
+    separators: &str,
+) -> Result<Query, QueryParseError> {
     let mut query = Query::new(all_fields.to_vec());
-    let parser = QueryParser::new(query_string, &mut query);
+    let parser = QueryParser::new(query_string, &mut query, separators);
     parser.parse()?;
     Ok(query)
 }
@@ -561,9 +571,13 @@ mod tests {
         vec!["title".to_string(), "body".to_string()]
     }
 
+    fn sep() -> &'static str {
+        " \t\n\r\x0C\x0B\x0D\u{00A0}-"
+    }
+
     #[test]
     fn parse_simple_term() {
-        let q = parse_query("hello", &fields()).unwrap();
+        let q = parse_query("hello", &fields(), sep()).unwrap();
         assert_eq!(q.clauses.len(), 1);
         assert_eq!(q.clauses[0].term, "hello");
         assert_eq!(q.clauses[0].fields, fields());
@@ -571,21 +585,21 @@ mod tests {
 
     #[test]
     fn parse_field_scope() {
-        let q = parse_query("title:hello", &fields()).unwrap();
+        let q = parse_query("title:hello", &fields(), sep()).unwrap();
         assert_eq!(q.clauses[0].fields, vec!["title"]);
         assert_eq!(q.clauses[0].term, "hello");
     }
 
     #[test]
     fn parse_boost_and_edit_distance() {
-        let q = parse_query("hello^3~2", &fields()).unwrap();
+        let q = parse_query("hello^3~2", &fields(), sep()).unwrap();
         assert_eq!(q.clauses[0].boost, 3.0);
         assert_eq!(q.clauses[0].edit_distance, Some(2));
     }
 
     #[test]
     fn parse_presence_modifiers() {
-        let q = parse_query("+foo -bar baz", &fields()).unwrap();
+        let q = parse_query("+foo -bar baz", &fields(), sep()).unwrap();
         assert_eq!(q.clauses[0].presence, Presence::Required);
         assert_eq!(q.clauses[1].presence, Presence::Prohibited);
         assert_eq!(q.clauses[2].presence, Presence::Optional);
@@ -593,14 +607,14 @@ mod tests {
 
     #[test]
     fn parse_wildcard() {
-        let q = parse_query("foo*", &fields()).unwrap();
+        let q = parse_query("foo*", &fields(), sep()).unwrap();
         assert_eq!(q.clauses[0].term, "foo*");
         assert!(!q.clauses[0].use_pipeline);
     }
 
     #[test]
     fn reject_unknown_field() {
-        let err = parse_query("unknown:x", &fields()).unwrap_err();
+        let err = parse_query("unknown:x", &fields(), sep()).unwrap_err();
         assert!(err.message.contains("unrecognised field"));
     }
 }
