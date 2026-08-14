@@ -22,6 +22,7 @@ pub fn idf(document_count: usize, doc_frequency: usize) -> f64 {
 /// w = idf * ((k1 + 1) * tf) / (k1 * (1 - b + b * (field_len / avg_field_len)) + tf)
 /// w *= field_boost * doc_boost
 /// w = round(w, 3)
+#[allow(clippy::too_many_arguments)]
 pub fn bm25_weight(
     idf: f64,
     tf: f64,
