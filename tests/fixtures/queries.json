@@ -2,33 +2,113 @@
   "marz": [
     {
       "ref": "page-a/",
-      "score": 5.09
+      "score": 11.53
     }
   ],
   "install": [
     {
       "ref": "page-a/",
-      "score": 5.09
+      "score": 11.53
     }
   ],
+  "installing": [
+    {
+      "ref": "page-a/",
+      "score": 11.53
+    }
+  ],
+  "running": [
+    {
+      "ref": "page-d/",
+      "score": 11.985
+    }
+  ],
+  "walk": [
+    {
+      "ref": "page-d/",
+      "score": 2.026
+    }
+  ],
+  "the": [],
   "foo*": [
     {
+      "ref": "page-f/",
+      "score": 16.638223
+    },
+    {
       "ref": "page-b/",
-      "score": 0.878
+      "score": 1.021769
+    }
+  ],
+  "*bar": [
+    {
+      "ref": "page-f/",
+      "score": 23.53
     }
   ],
   "hello~1": [],
+  "helo~1": [],
   "title:search": [
     {
       "ref": "page-b/",
-      "score": 3.902
+      "score": 8.896
+    }
+  ],
+  "text:foobar": [
+    {
+      "ref": "page-f/",
+      "score": 2.269
     }
   ],
   "+marz +engine": [
     {
       "ref": "page-a/",
-      "score": 4.174758
+      "score": 9.104
     }
   ],
-  "中文": []
+  "+search +wildcards": [
+    {
+      "ref": "page-b/",
+      "score": 7.312191
+    }
+  ],
+  "marz -offline": [],
+  "-marz": [
+    {
+      "ref": "page-b/",
+      "score": 0
+    },
+    {
+      "ref": "page-c/",
+      "score": 0
+    },
+    {
+      "ref": "page-d/",
+      "score": 0
+    },
+    {
+      "ref": "page-e/",
+      "score": 0
+    },
+    {
+      "ref": "page-f/",
+      "score": 0
+    }
+  ],
+  "foobar^5": [
+    {
+      "ref": "page-f/",
+      "score": 23.53
+    }
+  ],
+  "marz search": [
+    {
+      "ref": "page-a/",
+      "score": 8.78863
+    },
+    {
+      "ref": "page-b/",
+      "score": 6.290422
+    }
+  ]
 }

@@ -37,9 +37,30 @@ def main() -> None:
             "title": "中文文档",
             "text": "这是一个中文文档，用于测试中文搜索。",
         },
+        {
+            "location": "page-d/",
+            "title": "Running fast",
+            "text": "Running is faster than walking. Walk before you run.",
+        },
+        {
+            "location": "page-e/",
+            "title": "The quick brown fox",
+            "text": "The quick brown fox jumps over the lazy dog.",
+        },
+        {
+            "location": "page-f/",
+            "title": "Boosted foobar",
+            "text": "This document has a foobar term and is boosted.",
+        },
     ]
 
-    save("documents.json", documents)
+    documents_with_boosts = []
+    for doc in documents:
+        boosted_doc = dict(doc)
+        if doc["location"] == "page-f/":
+            boosted_doc["_boost"] = 2
+        documents_with_boosts.append(boosted_doc)
+    save("documents.json", documents_with_boosts)
 
     builder = lunr.get_default_builder()
     builder.ref("location")
@@ -47,20 +68,42 @@ def main() -> None:
     builder.field("text")
 
     for doc in documents:
-        builder.add(doc)
+        if doc["location"] == "page-f/":
+            builder.add(doc, {"boost": 2})
+        else:
+            builder.add(doc)
 
     index = builder.build()
     serialized = index.serialize()
     save("index.json", serialized)
 
     queries = [
+        # basic term matching and stemming
         "marz",
         "install",
+        "installing",
+        "running",
+        "walk",
+        # stop word only
+        "the",
+        # wildcards
         "foo*",
+        "*bar",
+        # fuzzy
         "hello~1",
+        "helo~1",
+        # field scoping
         "title:search",
+        "text:foobar",
+        # required / prohibited presence
         "+marz +engine",
-        "中文",
+        "+search +wildcards",
+        "marz -offline",
+        "-marz",
+        # boost
+        "foobar^5",
+        # multi-term OR ranking
+        "marz search",
     ]
     results: dict[str, list[dict]] = {}
     for query in queries:

@@ -13,5 +13,21 @@
     "location": "page-c/",
     "title": "中文文档",
     "text": "这是一个中文文档，用于测试中文搜索。"
+  },
+  {
+    "location": "page-d/",
+    "title": "Running fast",
+    "text": "Running is faster than walking. Walk before you run."
+  },
+  {
+    "location": "page-e/",
+    "title": "The quick brown fox",
+    "text": "The quick brown fox jumps over the lazy dog."
+  },
+  {
+    "location": "page-f/",
+    "title": "Boosted foobar",
+    "text": "This document has a foobar term and is boosted.",
+    "_boost": 2
   }
 ]

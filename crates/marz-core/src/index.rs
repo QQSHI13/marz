@@ -531,9 +531,11 @@ impl Index {
 
         let mut results: Vec<SearchResult> = results.into_values().collect();
         results.sort_by(|a, b| {
-            b.score
+            let by_score = b
+                .score
                 .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(std::cmp::Ordering::Equal);
+            by_score.then_with(|| a.ref_id.cmp(&b.ref_id))
         });
         results
     }
