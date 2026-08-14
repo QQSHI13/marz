@@ -64,9 +64,9 @@ fn porter_stem(w: &str) -> String {
 
     // Step 1a
     if let Some(caps) = regex_captures(r"^(.+?)(ss|i)es$", &w) {
-        w = format!("{}{}", &caps[1], &caps[2]);
+        w = format!("{}{}", caps[1], caps[2]);
     } else if let Some(caps) = regex_captures(r"^(.+?)([^s])s$", &w) {
-        w = format!("{}{}", &caps[1], &caps[2]);
+        w = format!("{}{}", caps[1], caps[2]);
     }
 
     // Step 1b
@@ -96,7 +96,7 @@ fn porter_stem(w: &str) -> String {
     // Step 1c
     if !step1b_done {
         if let Some(caps) = regex_captures(r"^(.+?[^aeiou])y$", &w) {
-            w = format!("{}i", &caps[1]);
+            w = format!("{}i", caps[1]);
         }
     }
 
@@ -151,7 +151,7 @@ fn porter_stem(w: &str) -> String {
     }
     if !step4_done {
         if let Some(caps) = regex_captures(r"^(.+?)(s|t)(ion)$", &w) {
-            let stem = format!("{}{}", &caps[1], &caps[2]);
+            let stem = format!("{}{}", caps[1], caps[2]);
             if measure(&stem) > 1 {
                 w = stem;
             }
