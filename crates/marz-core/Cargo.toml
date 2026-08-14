@@ -9,5 +9,6 @@ rust-version.workspace = true
 description = "Core search engine for Marz, a lunr-compatible offline search library."
 
 [dependencies]
+regex = "1"
 
 [dev-dependencies]

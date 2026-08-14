@@ -1,10 +1,26 @@
 //! Marz core search engine.
 //!
-//! A Rust implementation of a lunr-compatible offline search index.
-//! The goal is byte-for-byte scoring parity with lunr.js/lunr.py while being
-//! faster and smaller.
+//! A Rust implementation of a lunr-compatible offline search index with
+//! first-class internationalization support.
 
 #![warn(missing_docs)]
+
+pub mod index;
+pub mod language;
+pub mod languages;
+pub mod pipeline;
+pub mod query;
+pub mod query_parser;
+pub mod token;
+pub mod token_set;
+pub mod tokenizer;
+pub mod vector;
+
+/// Re-export core types.
+pub use index::{Index, IndexBuilder};
+pub use language::Language;
+pub use query::Query;
+pub use token::Token;
 
 /// Compute the lunr IDF for a term given its document frequency and total docs.
 ///
