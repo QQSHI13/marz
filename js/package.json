@@ -1,0 +1,20 @@
+{
+  "name": "marz-search",
+  "version": "0.1.0",
+  "description": "WebAssembly search client for Marz.",
+  "type": "module",
+  "main": "dist/marz.js",
+  "types": "dist/marz.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build:wasm": "wasm-pack build ../crates/marz-wasm --out-dir ../../js/pkg --target web",
+    "build:ts": "tsc",
+    "build": "npm run build:wasm && npm run build:ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  },
+  "license": "GPL-3.0"
+}

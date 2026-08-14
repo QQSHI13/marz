@@ -1,0 +1,13 @@
+[package]
+name = "marz-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Core search engine for Marz, a lunr-compatible offline search library."
+
+[dependencies]
+
+[dev-dependencies]

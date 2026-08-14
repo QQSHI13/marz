@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/marz-core", "crates/marz-wasm", "python"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["DocsForge Contributors"]
+license = "GPL-3.0"
+repository = "https://github.com/QQSHI13/marz"
+rust-version = "1.78"
+
+[workspace.dependencies]
+marz-core = { path = "crates/marz-core" }

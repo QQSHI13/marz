@@ -1,0 +1,17 @@
+[
+  {
+    "location": "page-a/",
+    "title": "Installing Marz",
+    "text": "Marz is a fast offline search engine. Install it with pip."
+  },
+  {
+    "location": "page-b/",
+    "title": "Search query syntax",
+    "text": "Use wildcards like foo* and fuzzy matches like hello~1."
+  },
+  {
+    "location": "page-c/",
+    "title": "中文文档",
+    "text": "这是一个中文文档，用于测试中文搜索。"
+  }
+]

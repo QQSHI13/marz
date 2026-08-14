@@ -1,0 +1,260 @@
+{
+  "version": "2.3.9",
+  "fields": [
+    "title",
+    "text"
+  ],
+  "fieldVectors": [
+    [
+      "title/page-a/",
+      [
+        0,
+        4.7,
+        1,
+        4.7
+      ]
+    ],
+    [
+      "text/page-a/",
+      [
+        0,
+        0.39,
+        1,
+        0.39,
+        2,
+        0.814,
+        3,
+        0.814,
+        4,
+        0.39,
+        5,
+        0.814,
+        6,
+        0.814
+      ]
+    ],
+    [
+      "title/page-b/",
+      [
+        4,
+        3.902,
+        7,
+        8.143,
+        8,
+        8.143
+      ]
+    ],
+    [
+      "text/page-b/",
+      [
+        9,
+        0.878,
+        10,
+        0.878,
+        11,
+        0.878,
+        12,
+        0.878,
+        13,
+        0.878,
+        14,
+        0.878
+      ]
+    ],
+    [
+      "title/page-c/",
+      [
+        15,
+        12.33
+      ]
+    ],
+    [
+      "text/page-c/",
+      [
+        16,
+        1.445
+      ]
+    ]
+  ],
+  "invertedIndex": [
+    [
+      "engin",
+      {
+        "title": {},
+        "text": {
+          "page-a/": {}
+        },
+        "_index": 5
+      }
+    ],
+    [
+      "fast",
+      {
+        "title": {},
+        "text": {
+          "page-a/": {}
+        },
+        "_index": 2
+      }
+    ],
+    [
+      "foo",
+      {
+        "title": {},
+        "text": {
+          "page-b/": {}
+        },
+        "_index": 11
+      }
+    ],
+    [
+      "fuzzi",
+      {
+        "title": {},
+        "text": {
+          "page-b/": {}
+        },
+        "_index": 12
+      }
+    ],
+    [
+      "hello~1.",
+      {
+        "title": {},
+        "text": {
+          "page-b/": {}
+        },
+        "_index": 14
+      }
+    ],
+    [
+      "instal",
+      {
+        "title": {
+          "page-a/": {}
+        },
+        "text": {
+          "page-a/": {}
+        },
+        "_index": 0
+      }
+    ],
+    [
+      "marz",
+      {
+        "title": {
+          "page-a/": {}
+        },
+        "text": {
+          "page-a/": {}
+        },
+        "_index": 1
+      }
+    ],
+    [
+      "match",
+      {
+        "title": {},
+        "text": {
+          "page-b/": {}
+        },
+        "_index": 13
+      }
+    ],
+    [
+      "offlin",
+      {
+        "title": {},
+        "text": {
+          "page-a/": {}
+        },
+        "_index": 3
+      }
+    ],
+    [
+      "pip",
+      {
+        "title": {},
+        "text": {
+          "page-a/": {}
+        },
+        "_index": 6
+      }
+    ],
+    [
+      "queri",
+      {
+        "title": {
+          "page-b/": {}
+        },
+        "text": {},
+        "_index": 7
+      }
+    ],
+    [
+      "search",
+      {
+        "title": {
+          "page-b/": {}
+        },
+        "text": {
+          "page-a/": {}
+        },
+        "_index": 4
+      }
+    ],
+    [
+      "syntax",
+      {
+        "title": {
+          "page-b/": {}
+        },
+        "text": {},
+        "_index": 8
+      }
+    ],
+    [
+      "us",
+      {
+        "title": {},
+        "text": {
+          "page-b/": {}
+        },
+        "_index": 9
+      }
+    ],
+    [
+      "wildcard",
+      {
+        "title": {},
+        "text": {
+          "page-b/": {}
+        },
+        "_index": 10
+      }
+    ],
+    [
+      "中文文档",
+      {
+        "title": {
+          "page-c/": {}
+        },
+        "text": {},
+        "_index": 15
+      }
+    ],
+    [
+      "这是一个中文文档，用于测试中文搜索。",
+      {
+        "title": {},
+        "text": {
+          "page-c/": {}
+        },
+        "_index": 16
+      }
+    ]
+  ],
+  "pipeline": [
+    "stemmer"
+  ]
+}

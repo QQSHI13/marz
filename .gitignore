@@ -1,0 +1,22 @@
+/target
+Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.so
+python/dist/
+python/build/
+
+# JS/WASM
+js/node_modules/
+js/dist/
+js/pkg/
+
+# Editors
+.DS_Store
+.idea/
+.vscode/
