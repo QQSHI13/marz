@@ -17,7 +17,7 @@ pub mod tokenizer;
 pub mod vector;
 
 /// Re-export core types.
-pub use index::{Index, IndexBuilder};
+pub use index::{Index, IndexBuilder, MatchData, SearchResult};
 pub use language::Language;
 pub use query::Query;
 pub use token::Token;

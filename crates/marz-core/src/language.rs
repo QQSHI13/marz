@@ -33,6 +33,14 @@ pub trait Language: Send + Sync {
     fn separator_chars(&self) -> &str {
         " \t\n\r\x0C\x0B\x0D\u{00A0}"
     }
+
+    /// Labels for the indexing pipeline functions, used for serialization.
+    ///
+    /// An English pipeline returns `["trimmer", "stopWordFilter", "stemmer"]`.
+    /// Languages without these functions return an empty list.
+    fn pipeline_labels(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
 }
 
 /// A language handle used throughout the engine.

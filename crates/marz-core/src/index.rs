@@ -12,13 +12,19 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::language::LanguageRef;
 use crate::pipeline::Pipeline;
 use crate::query::{Presence, Query};
 use crate::query_parser::{parse_query, QueryParseError};
+use crate::token::{TokenMetadata, POSITION};
 use crate::token_set::TokenSet;
 use crate::vector::Vector;
 use crate::{bm25_weight, idf};
+
+/// Marz index serialization format version.
+const INDEX_VERSION: &str = "0.1.0";
 
 /// A reference to one field of one document, formatted as `docRef/fieldName`.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -47,6 +53,18 @@ impl FieldRef {
     pub fn field_name(&self) -> &str {
         &self.field_name
     }
+
+    /// Parse a field reference from its string representation.
+    ///
+    /// The field name is everything after the last `/`, so document references
+    /// may contain `/`.
+    pub fn from_string(s: &str) -> Self {
+        let split = s.rfind('/').unwrap_or(0);
+        Self {
+            doc_ref: s[..split].to_string(),
+            field_name: s[split + 1..].to_string(),
+        }
+    }
 }
 
 impl std::fmt::Display for FieldRef {
@@ -57,11 +75,11 @@ impl std::fmt::Display for FieldRef {
 
 /// Metadata stored for a single term occurrence in a document field.
 ///
-/// The default build keeps this empty to stay compact; position metadata can be
-/// added later when needed for snippets.
+/// Positions are stored as `(start, length)` character offsets in the source
+/// field, matching lunr's `position` metadata.
 #[derive(Debug, Clone, Default)]
 pub struct PostingDoc {
-    /// Term positions in the field, as `(start, length)` byte offsets.
+    /// Term positions in the field, as `(start, length)` character offsets.
     pub positions: Vec<(usize, usize)>,
 }
 
@@ -77,25 +95,30 @@ pub struct Posting {
 /// A matching term/field combination returned with a search result.
 #[derive(Debug, Clone, Default)]
 pub struct MatchData {
-    /// Maps a matched term to the set of fields it matched in.
-    pub terms: HashMap<String, HashSet<String>>,
+    /// Maps a matched term to a map of fields -> positions.
+    pub terms: HashMap<String, HashMap<String, Vec<(usize, usize)>>>,
 }
 
 impl MatchData {
-    /// Record that `term` matched in `field`.
-    pub fn add_term(&mut self, term: &str, field: &str) {
+    /// Record that `term` matched in `field` at the given positions.
+    pub fn add_term(&mut self, term: &str, field: &str, positions: &[(usize, usize)]) {
         self.terms
             .entry(term.to_string())
             .or_default()
-            .insert(field.to_string());
+            .entry(field.to_string())
+            .or_default()
+            .extend(positions.iter().copied());
     }
 
     /// Merge another match data object into this one.
     pub fn merge(&mut self, other: &Self) {
         for (term, fields) in &other.terms {
             let entry = self.terms.entry(term.clone()).or_default();
-            for field in fields {
-                entry.insert(field.clone());
+            for (field, positions) in fields {
+                entry
+                    .entry(field.clone())
+                    .or_default()
+                    .extend(positions.iter().copied());
             }
         }
     }
@@ -209,6 +232,15 @@ impl IndexBuilder {
             for term in terms {
                 *term_frequencies.entry(term.term.clone()).or_insert(0) += 1;
 
+                let position = term
+                    .metadata
+                    .get(POSITION)
+                    .and_then(|m| match m {
+                        TokenMetadata::Pair(start, length) => Some((*start, *length)),
+                        _ => None,
+                    })
+                    .unwrap_or((0, term.term.len()));
+
                 let posting = self
                     .inverted_index
                     .entry(term.term.clone())
@@ -229,7 +261,9 @@ impl IndexBuilder {
                     .get_mut(&field.name)
                     .expect("field initialized when posting created")
                     .entry(doc_ref.clone())
-                    .or_default();
+                    .or_default()
+                    .positions
+                    .push(position);
             }
 
             if !term_frequencies.is_empty() {
@@ -433,12 +467,13 @@ impl Index {
                         }
 
                         if let Some(posting_field) = posting.fields.get(field_name) {
-                            for doc_ref in posting_field.keys() {
+                            for (doc_ref, posting_doc) in posting_field {
                                 let field_ref = FieldRef::new(doc_ref, field_name);
-                                matching_fields
-                                    .entry(field_ref)
-                                    .or_default()
-                                    .add_term(&expanded_term, field_name);
+                                matching_fields.entry(field_ref).or_default().add_term(
+                                    &expanded_term,
+                                    field_name,
+                                    &posting_doc.positions,
+                                );
                             }
                         }
                     }
@@ -539,6 +574,135 @@ impl Index {
         });
         results
     }
+
+    /// Serialize the index to a JSON string.
+    pub fn to_json(&self) -> String {
+        let mut field_vectors: Vec<(&FieldRef, &Vector)> = self.field_vectors.iter().collect();
+        field_vectors.sort_by_key(|(fr, _)| fr.to_string());
+        let field_vectors: Vec<(String, Vec<f64>)> = field_vectors
+            .into_iter()
+            .map(|(fr, vec)| (fr.to_string(), vec.to_vec()))
+            .collect();
+
+        let inverted_index: Vec<(String, SerializedPosting)> = self
+            .inverted_index
+            .iter()
+            .map(|(term, posting)| {
+                let mut fields: HashMap<String, HashMap<String, SerializedPostingDoc>> =
+                    HashMap::new();
+                for (field_name, docs) in &posting.fields {
+                    if docs.is_empty() {
+                        continue;
+                    }
+                    let mut doc_map = HashMap::new();
+                    for (doc_ref, posting_doc) in docs {
+                        doc_map.insert(
+                            doc_ref.clone(),
+                            SerializedPostingDoc {
+                                position: posting_doc.positions.clone(),
+                            },
+                        );
+                    }
+                    fields.insert(field_name.clone(), doc_map);
+                }
+                (
+                    term.clone(),
+                    SerializedPosting {
+                        index: posting.index,
+                        fields,
+                    },
+                )
+            })
+            .collect();
+
+        let serialized = SerializedIndex {
+            version: INDEX_VERSION.to_string(),
+            language: self.pipeline.language().code().to_string(),
+            fields: self.fields.clone(),
+            field_vectors,
+            inverted_index,
+            pipeline: self.pipeline.labels(),
+        };
+
+        serde_json::to_string(&serialized).expect("index serialization")
+    }
+
+    /// Load a previously serialized index.
+    ///
+    /// The `language` must match the tokenizer/pipeline used to build the index.
+    pub fn load(json: &str, language: LanguageRef) -> Result<Self, serde_json::Error> {
+        let serialized: SerializedIndex = serde_json::from_str(json)?;
+
+        let mut field_vectors: HashMap<FieldRef, Vector> = HashMap::new();
+        for (ref_str, elements) in serialized.field_vectors {
+            let field_ref = FieldRef::from_string(&ref_str);
+            field_vectors.insert(field_ref, Vector::from_vec(&elements));
+        }
+
+        let mut inverted_index: BTreeMap<String, Posting> = BTreeMap::new();
+        for (term, sp) in serialized.inverted_index {
+            let mut posting = Posting {
+                index: sp.index,
+                fields: HashMap::new(),
+            };
+            for (field_name, docs) in sp.fields {
+                let mut doc_map = HashMap::new();
+                for (doc_ref, spd) in docs {
+                    doc_map.insert(
+                        doc_ref,
+                        PostingDoc {
+                            positions: spd.position,
+                        },
+                    );
+                }
+                posting.fields.insert(field_name, doc_map);
+            }
+            inverted_index.insert(term, posting);
+        }
+
+        let token_set = TokenSet::from_sorted(&inverted_index.keys().cloned().collect::<Vec<_>>());
+
+        Ok(Index {
+            inverted_index,
+            field_vectors,
+            token_set,
+            fields: serialized.fields,
+            pipeline: Pipeline::new(language),
+        })
+    }
+
+    /// Return the indexed field names.
+    pub fn fields(&self) -> &[String] {
+        &self.fields
+    }
+}
+
+/// Serialized index format.
+#[derive(Serialize, Deserialize)]
+struct SerializedIndex {
+    version: String,
+    language: String,
+    fields: Vec<String>,
+    #[serde(rename = "fieldVectors")]
+    field_vectors: Vec<(String, Vec<f64>)>,
+    #[serde(rename = "invertedIndex")]
+    inverted_index: Vec<(String, SerializedPosting)>,
+    pipeline: Vec<String>,
+}
+
+/// Serialized posting for a single term.
+#[derive(Serialize, Deserialize)]
+struct SerializedPosting {
+    #[serde(rename = "_index")]
+    index: usize,
+    #[serde(flatten)]
+    fields: HashMap<String, HashMap<String, SerializedPostingDoc>>,
+}
+
+/// Serialized per-document posting metadata.
+#[derive(Serialize, Deserialize)]
+struct SerializedPostingDoc {
+    position: Vec<(usize, usize)>,
 }
 
 #[cfg(test)]

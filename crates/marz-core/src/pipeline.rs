@@ -20,6 +20,15 @@ impl Pipeline {
         self.language.clone()
     }
 
+    /// Return the serialization labels for this pipeline's functions.
+    pub fn labels(&self) -> Vec<String> {
+        self.language
+            .pipeline_labels()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
     /// Run the default indexing pipeline: trim, stop-word filter, stem.
     pub fn run_index(&self, tokens: Vec<Token>) -> Vec<Token> {
         let mut output = Vec::new();
