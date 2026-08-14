@@ -16,7 +16,6 @@ use crate::language::LanguageRef;
 use crate::pipeline::Pipeline;
 use crate::query::{Presence, Query};
 use crate::query_parser::{parse_query, QueryParseError};
-use crate::token::Token;
 use crate::token_set::TokenSet;
 use crate::vector::Vector;
 use crate::{bm25_weight, idf};
@@ -365,7 +364,7 @@ impl Index {
 
         for clause in &query.clauses {
             let terms = if clause.use_pipeline {
-                self.pipeline.run_search(Token::new(&clause.term))
+                self.pipeline.run_search(&clause.term)
             } else {
                 vec![clause.term.clone()]
             };

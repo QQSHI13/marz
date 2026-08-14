@@ -40,12 +40,20 @@ impl Pipeline {
         output
     }
 
-    /// Run the search pipeline: stem only.
-    pub fn run_search(&self, mut token: Token) -> Vec<String> {
-        if !self.language.trim(&mut token) {
-            return Vec::new();
+    /// Run the search pipeline: tokenize, trim, and stem the input string.
+    ///
+    /// This mirrors lunr's `pipeline.runString`, which tokenizes a query term
+    /// before applying the search-pipeline functions.
+    pub fn run_search(&self, text: &str) -> Vec<String> {
+        let tokens = self.language.tokenize(text);
+        let mut output = Vec::new();
+        for mut token in tokens {
+            if !self.language.trim(&mut token) {
+                continue;
+            }
+            output.push(self.language.stem(&token.term));
         }
-        vec![self.language.stem(&token.term)]
+        output
     }
 }
 
