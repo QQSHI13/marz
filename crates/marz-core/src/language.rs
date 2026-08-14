@@ -43,7 +43,11 @@ pub struct MultiLanguage {
 impl MultiLanguage {
     /// Create a multi-language configuration.
     pub fn new(languages: Vec<LanguageRef>) -> Self {
-        let code = languages.iter().map(|l| l.code()).collect::<Vec<_>>().join("-");
+        let code = languages
+            .iter()
+            .map(|l| l.code())
+            .collect::<Vec<_>>()
+            .join("-");
         Self { code, languages }
     }
 }

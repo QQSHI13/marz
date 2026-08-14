@@ -1,7 +1,8 @@
-//! Token set for wildcard expansion.
+//! Token set for wildcard and fuzzy expansion.
 //!
-//! This is a simplified implementation that supports exact terms and `*`
-//! wildcards. Edit-distance (fuzzy) expansion will be added separately.
+//! The token set is stored as a trie. It supports exact lookup, `*` wildcard
+//! expansion, and Levenshtein edit-distance expansion used by the fuzzy
+//! query operator (`~N`).
 
 use std::collections::HashMap;
 
@@ -67,7 +68,13 @@ impl TokenSet {
         node.final_
     }
 
-    fn expand_wildcard(&self, pattern: &str, node: &Node, prefix: String, results: &mut Vec<String>) {
+    fn expand_wildcard(
+        &self,
+        pattern: &str,
+        node: &Node,
+        prefix: String,
+        results: &mut Vec<String>,
+    ) {
         if pattern.is_empty() {
             if node.final_ {
                 results.push(prefix);
@@ -88,12 +95,79 @@ impl TokenSet {
                 let new_pattern = format!("*{}", rest);
                 self.expand_wildcard(&new_pattern, edge_node, new_prefix, results);
             }
-        } else {
-            if let Some(edge_node) = node.edges.get(&ch) {
-                let mut new_prefix = prefix;
-                new_prefix.push(ch);
-                self.expand_wildcard(&rest, edge_node, new_prefix, results);
+        } else if let Some(edge_node) = node.edges.get(&ch) {
+            let mut new_prefix = prefix;
+            new_prefix.push(ch);
+            self.expand_wildcard(&rest, edge_node, new_prefix, results);
+        }
+    }
+
+    /// Expand a query term using Levenshtein edit distance.
+    ///
+    /// Returns all index terms whose edit distance to `term` is less than or
+    /// equal to `max_edits`. A `max_edits` of `0` behaves like an exact lookup.
+    pub fn expand_fuzzy(&self, term: &str, max_edits: usize) -> Vec<String> {
+        if max_edits == 0 {
+            return self.expand(term);
+        }
+
+        let pattern: Vec<char> = term.chars().collect();
+        let pattern_len = pattern.len();
+
+        // Initial distance vector: [0, 1, 2, ..., pattern_len].
+        let mut initial = Vec::with_capacity(pattern_len + 1);
+        for i in 0..=pattern_len {
+            initial.push(i);
+        }
+
+        let mut results = Vec::new();
+        self.expand_fuzzy_recursive(
+            &self.root,
+            String::new(),
+            &pattern,
+            &initial,
+            max_edits,
+            &mut results,
+        );
+        results
+    }
+
+    fn expand_fuzzy_recursive(
+        &self,
+        node: &Node,
+        prefix: String,
+        pattern: &[char],
+        current: &[usize],
+        max_edits: usize,
+        results: &mut Vec<String>,
+    ) {
+        // If the current node represents a complete term and the distance to the
+        // full pattern is within budget, record it.
+        if node.final_ && current[pattern.len()] <= max_edits {
+            results.push(prefix.clone());
+        }
+
+        // Prune when every possible edit distance in this branch is too large.
+        if current.iter().all(|&d| d > max_edits) {
+            return;
+        }
+
+        for (edge_ch, edge_node) in &node.edges {
+            let mut next = Vec::with_capacity(pattern.len() + 1);
+            // Deletion from the pattern.
+            next.push(current[0] + 1);
+
+            for j in 1..=pattern.len() {
+                let cost = if *edge_ch == pattern[j - 1] { 0 } else { 1 };
+                let insertion = next[j - 1] + 1;
+                let deletion = current[j] + 1;
+                let substitution = current[j - 1] + cost;
+                next.push(insertion.min(deletion).min(substitution));
             }
+
+            let mut new_prefix = prefix.clone();
+            new_prefix.push(*edge_ch);
+            self.expand_fuzzy_recursive(edge_node, new_prefix, pattern, &next, max_edits, results);
         }
     }
 }
@@ -130,5 +204,28 @@ mod tests {
         let mut results = set.expand("*bar");
         results.sort();
         assert_eq!(results, vec!["foobar"]);
+    }
+
+    #[test]
+    fn fuzzy_expansion() {
+        let mut set = TokenSet::new();
+        set.insert("hello");
+        set.insert("hallo");
+        set.insert("help");
+        set.insert("world");
+        let mut results = set.expand_fuzzy("helo", 1);
+        results.sort();
+        assert_eq!(results, vec!["hello", "help"]);
+    }
+
+    #[test]
+    fn fuzzy_expansion_distance_two() {
+        let mut set = TokenSet::new();
+        set.insert("hello");
+        set.insert("hallo");
+        set.insert("world");
+        let mut results = set.expand_fuzzy("helo", 2);
+        results.sort();
+        assert_eq!(results, vec!["hallo", "hello"]);
     }
 }

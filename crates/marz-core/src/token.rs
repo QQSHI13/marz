@@ -38,10 +38,19 @@ impl Token {
     }
 
     /// Create a token with position and index metadata, matching lunr's defaults.
-    pub fn with_position(term: impl Into<String>, start: usize, length: usize, index: usize) -> Self {
+    pub fn with_position(
+        term: impl Into<String>,
+        start: usize,
+        length: usize,
+        index: usize,
+    ) -> Self {
         let mut token = Self::new(term);
-        token.metadata.insert(POSITION.to_string(), TokenMetadata::Pair(start, length));
-        token.metadata.insert(INDEX.to_string(), TokenMetadata::Integer(index));
+        token
+            .metadata
+            .insert(POSITION.to_string(), TokenMetadata::Pair(start, length));
+        token
+            .metadata
+            .insert(INDEX.to_string(), TokenMetadata::Integer(index));
         token
     }
 

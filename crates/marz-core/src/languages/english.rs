@@ -20,7 +20,10 @@ impl Language for English {
     fn trim(&self, token: &mut Token) -> bool {
         token.update(|s| {
             let start = s.find(|c: char| is_word_char(c)).unwrap_or(s.len());
-            let end = s.rfind(|c: char| is_word_char(c)).map(|i| i + 1).unwrap_or(start);
+            let end = s
+                .rfind(|c: char| is_word_char(c))
+                .map(|i| i + 1)
+                .unwrap_or(start);
             s[start..end].to_string()
         });
         !token.term.is_empty()
@@ -41,17 +44,16 @@ fn is_word_char(c: char) -> bool {
 
 /// English stop-word list from lunr.js.
 const STOP_WORDS: &[&str] = &[
-    "a", "able", "about", "across", "after", "all", "almost", "also", "am", "among", "an",
-    "and", "any", "are", "as", "at", "be", "because", "been", "but", "by", "can", "cannot",
-    "could", "dear", "did", "do", "does", "either", "else", "ever", "every", "for", "from",
-    "get", "got", "had", "has", "have", "he", "her", "hers", "him", "his", "how", "however",
-    "i", "if", "in", "into", "is", "it", "its", "just", "least", "let", "like", "likely",
-    "may", "me", "might", "most", "must", "my", "neither", "no", "nor", "not", "of", "off",
-    "often", "on", "only", "or", "other", "our", "own", "rather", "said", "say", "says",
-    "she", "should", "since", "so", "some", "than", "that", "the", "their", "them", "then",
-    "there", "these", "they", "this", "tis", "to", "too", "twas", "us", "wants", "was", "we",
-    "were", "what", "when", "where", "which", "while", "who", "whom", "why", "will", "with",
-    "would", "yet", "you", "your",
+    "a", "able", "about", "across", "after", "all", "almost", "also", "am", "among", "an", "and",
+    "any", "are", "as", "at", "be", "because", "been", "but", "by", "can", "cannot", "could",
+    "dear", "did", "do", "does", "either", "else", "ever", "every", "for", "from", "get", "got",
+    "had", "has", "have", "he", "her", "hers", "him", "his", "how", "however", "i", "if", "in",
+    "into", "is", "it", "its", "just", "least", "let", "like", "likely", "may", "me", "might",
+    "most", "must", "my", "neither", "no", "nor", "not", "of", "off", "often", "on", "only", "or",
+    "other", "our", "own", "rather", "said", "say", "says", "she", "should", "since", "so", "some",
+    "than", "that", "the", "their", "them", "then", "there", "these", "they", "this", "tis", "to",
+    "too", "twas", "us", "wants", "was", "we", "were", "what", "when", "where", "which", "while",
+    "who", "whom", "why", "will", "with", "would", "yet", "you", "your",
 ];
 
 /// Porter stemmer ported from lunr.js.
@@ -102,11 +104,27 @@ fn porter_stem(w: &str) -> String {
 
     // Step 2
     let step2_replacements = [
-        ("ational", "ate"), ("tional", "tion"), ("enci", "ence"), ("anci", "ance"),
-        ("izer", "ize"), ("bli", "ble"), ("alli", "al"), ("entli", "ent"), ("eli", "e"),
-        ("ousli", "ous"), ("ization", "ize"), ("ation", "ate"), ("ator", "ate"),
-        ("alism", "al"), ("iveness", "ive"), ("fulness", "ful"), ("ousness", "ous"),
-        ("aliti", "al"), ("iviti", "ive"), ("biliti", "ble"), ("logi", "log"),
+        ("ational", "ate"),
+        ("tional", "tion"),
+        ("enci", "ence"),
+        ("anci", "ance"),
+        ("izer", "ize"),
+        ("bli", "ble"),
+        ("alli", "al"),
+        ("entli", "ent"),
+        ("eli", "e"),
+        ("ousli", "ous"),
+        ("ization", "ize"),
+        ("ation", "ate"),
+        ("ator", "ate"),
+        ("alism", "al"),
+        ("iveness", "ive"),
+        ("fulness", "ful"),
+        ("ousness", "ous"),
+        ("aliti", "al"),
+        ("iviti", "ive"),
+        ("biliti", "ble"),
+        ("logi", "log"),
     ];
     for (suffix, replacement) in step2_replacements {
         if let Some(caps) = regex_captures(&format!(r"^(.+?){}$", regex::escape(suffix)), &w) {
@@ -120,8 +138,13 @@ fn porter_stem(w: &str) -> String {
 
     // Step 3
     let step3_replacements = [
-        ("icate", "ic"), ("ative", ""), ("alize", "al"), ("iciti", "ic"),
-        ("ical", "ic"), ("ful", ""), ("ness", ""),
+        ("icate", "ic"),
+        ("ative", ""),
+        ("alize", "al"),
+        ("iciti", "ic"),
+        ("ical", "ic"),
+        ("ful", ""),
+        ("ness", ""),
     ];
     for (suffix, replacement) in step3_replacements {
         if let Some(caps) = regex_captures(&format!(r"^(.+?){}$", regex::escape(suffix)), &w) {
@@ -135,8 +158,8 @@ fn porter_stem(w: &str) -> String {
 
     // Step 4
     let step4_suffixes = [
-        "al", "ance", "ence", "er", "ic", "able", "ible", "ant", "ement", "ment", "ent",
-        "ou", "ism", "ate", "iti", "ous", "ive", "ize",
+        "al", "ance", "ence", "er", "ic", "able", "ible", "ant", "ement", "ment", "ent", "ou",
+        "ism", "ate", "iti", "ous", "ive", "ize",
     ];
     let mut step4_done = false;
     for suffix in step4_suffixes {
@@ -251,12 +274,7 @@ fn cvc_pattern(s: &str) -> bool {
     let c1 = chars[n - 3];
     let v = chars[n - 2];
     let c2 = chars[n - 1];
-    !is_vowel(c1)
-        && is_vowel(v)
-        && !is_vowel(c2)
-        && c2 != 'w'
-        && c2 != 'x'
-        && c2 != 'y'
+    !is_vowel(c1) && is_vowel(v) && !is_vowel(c2) && c2 != 'w' && c2 != 'x' && c2 != 'y'
 }
 
 #[cfg(test)]

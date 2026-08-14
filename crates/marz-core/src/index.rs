@@ -14,6 +14,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::language::LanguageRef;
 use crate::pipeline::Pipeline;
+use crate::query::{Presence, Query};
+use crate::query_parser::{parse_query, QueryParseError};
 use crate::token::Token;
 use crate::token_set::TokenSet;
 use crate::vector::Vector;
@@ -208,17 +210,20 @@ impl IndexBuilder {
             for term in terms {
                 *term_frequencies.entry(term.term.clone()).or_insert(0) += 1;
 
-                let posting = self.inverted_index.entry(term.term.clone()).or_insert_with(|| {
-                    let mut posting = Posting {
-                        index: self.term_index_counter,
-                        fields: HashMap::new(),
-                    };
-                    self.term_index_counter += 1;
-                    for f in &self.fields {
-                        posting.fields.insert(f.name.clone(), HashMap::new());
-                    }
-                    posting
-                });
+                let posting = self
+                    .inverted_index
+                    .entry(term.term.clone())
+                    .or_insert_with(|| {
+                        let mut posting = Posting {
+                            index: self.term_index_counter,
+                            fields: HashMap::new(),
+                        };
+                        self.term_index_counter += 1;
+                        for f in &self.fields {
+                            posting.fields.insert(f.name.clone(), HashMap::new());
+                        }
+                        posting
+                    });
 
                 posting
                     .fields
@@ -239,9 +244,8 @@ impl IndexBuilder {
     pub fn build(self) -> Index {
         let average_field_lengths = self.calculate_average_field_lengths();
         let field_vectors = self.create_field_vectors(&average_field_lengths);
-        let token_set = TokenSet::from_sorted(
-            &self.inverted_index.keys().cloned().collect::<Vec<_>>(),
-        );
+        let token_set =
+            TokenSet::from_sorted(&self.inverted_index.keys().cloned().collect::<Vec<_>>());
 
         Index {
             inverted_index: self.inverted_index,
@@ -266,13 +270,20 @@ impl IndexBuilder {
         let mut average: HashMap<String, f64> = HashMap::new();
         for field in &self.fields {
             let total = accumulator.get(&field.name).copied().unwrap_or(0) as f64;
-            let count = documents_with_field.get(&field.name).copied().unwrap_or(1).max(1) as f64;
+            let count = documents_with_field
+                .get(&field.name)
+                .copied()
+                .unwrap_or(1)
+                .max(1) as f64;
             average.insert(field.name.clone(), total / count);
         }
         average
     }
 
-    fn create_field_vectors(&self, average_field_lengths: &HashMap<String, f64>) -> HashMap<FieldRef, Vector> {
+    fn create_field_vectors(
+        &self,
+        average_field_lengths: &HashMap<String, f64>,
+    ) -> HashMap<FieldRef, Vector> {
         let mut field_vectors = HashMap::new();
 
         for (field_ref, term_frequencies) in &self.field_term_frequencies {
@@ -288,9 +299,13 @@ impl IndexBuilder {
 
             let mut vector = Vector::new();
             for (term, tf) in term_frequencies {
-                let posting = self.inverted_index.get(term).expect("term in frequencies must be indexed");
+                let posting = self
+                    .inverted_index
+                    .get(term)
+                    .expect("term in frequencies must be indexed");
                 let term_index = posting.index;
-                let document_frequency: usize = posting.fields.values().map(|docs| docs.len()).sum();
+                let document_frequency: usize =
+                    posting.fields.values().map(|docs| docs.len()).sum();
                 let idf_value = idf(self.document_count, document_frequency);
                 let weight = bm25_weight(
                     idf_value,
@@ -322,68 +337,179 @@ pub struct Index {
 }
 
 impl Index {
-    /// Perform a simple OR search across all fields.
+    /// Search the index using lunr query syntax.
     ///
-    /// This is a temporary convenience method used until the full lunr query
-    /// parser is implemented. Terms are split on whitespace, passed through the
-    /// search pipeline, expanded against the index token set, and scored.
-    pub fn search(&self, query_string: &str) -> Vec<SearchResult> {
+    /// Supports `+` required, `-` prohibited, `field:term`, `term^boost`,
+    /// `term~edits`, and `*` wildcards.
+    pub fn search(&self, query_string: &str) -> Result<Vec<SearchResult>, QueryParseError> {
+        let query = parse_query(query_string, &self.fields)?;
+        Ok(self.execute_query(&query))
+    }
+
+    /// Execute a programmatic [`Query`] against the index.
+    pub fn query(&self, query: &Query) -> Vec<SearchResult> {
+        self.execute_query(query)
+    }
+
+    fn execute_query(&self, query: &Query) -> Vec<SearchResult> {
         let mut query_vectors: HashMap<String, Vector> = HashMap::new();
         for field in &self.fields {
             query_vectors.insert(field.clone(), Vector::new());
         }
 
         let mut matching_fields: HashMap<FieldRef, MatchData> = HashMap::new();
+        let mut required_matches: HashMap<String, Option<HashSet<String>>> = HashMap::new();
+        let mut prohibited_matches: HashMap<String, HashSet<String>> = HashMap::new();
 
-        for raw_term in query_string.split_whitespace() {
-            if raw_term.is_empty() {
-                continue;
-            }
-            let token = Token::new(raw_term.to_lowercase());
-            for term in self.pipeline.run_search(token) {
+        for clause in &query.clauses {
+            let terms = if clause.use_pipeline {
+                self.pipeline.run_search(Token::new(&clause.term))
+            } else {
+                vec![clause.term.clone()]
+            };
+
+            let mut clause_matches: HashSet<String> = HashSet::new();
+            let mut short_circuit = false;
+
+            for term in terms {
                 if term.is_empty() {
                     continue;
                 }
-                for expanded in self.token_set.expand(&term) {
-                    let Some(posting) = self.inverted_index.get(&expanded) else {
+
+                let expanded = if clause.term.contains('*') {
+                    self.token_set.expand(&term)
+                } else if let Some(edits) = clause.edit_distance {
+                    self.token_set.expand_fuzzy(&term, edits)
+                } else {
+                    self.token_set.expand(&term)
+                };
+
+                if expanded.is_empty() {
+                    if clause.presence == Presence::Required {
+                        for field in &clause.fields {
+                            required_matches.insert(field.clone(), Some(HashSet::new()));
+                        }
+                        short_circuit = true;
+                    }
+                    continue;
+                }
+
+                if short_circuit {
+                    continue;
+                }
+
+                for expanded_term in expanded {
+                    let Some(posting) = self.inverted_index.get(&expanded_term) else {
                         continue;
                     };
                     let term_index = posting.index;
 
-                    for field_name in &self.fields {
-                        query_vectors
-                            .get_mut(field_name)
-                            .unwrap()
-                            .upsert(term_index, 1.0, |a, b| a + b);
+                    for field_name in &clause.fields {
+                        query_vectors.get_mut(field_name).unwrap().upsert(
+                            term_index,
+                            clause.boost,
+                            |a, b| a + b,
+                        );
 
-                        let Some(docs) = posting.fields.get(field_name) else {
-                            continue;
-                        };
-                        for doc_ref in docs.keys() {
-                            let field_ref = FieldRef::new(doc_ref, field_name);
-                            matching_fields
-                                .entry(field_ref)
-                                .or_default()
-                                .add_term(&expanded, field_name);
+                        let docs: HashSet<String> = posting
+                            .fields
+                            .get(field_name)
+                            .map(|m| m.keys().cloned().collect())
+                            .unwrap_or_default();
+
+                        match clause.presence {
+                            Presence::Required => {
+                                clause_matches.extend(docs.iter().cloned());
+                            }
+                            Presence::Prohibited => {
+                                prohibited_matches
+                                    .entry(field_name.clone())
+                                    .or_default()
+                                    .extend(docs.iter().cloned());
+                                continue;
+                            }
+                            Presence::Optional => {}
+                        }
+
+                        if let Some(posting_field) = posting.fields.get(field_name) {
+                            for doc_ref in posting_field.keys() {
+                                let field_ref = FieldRef::new(doc_ref, field_name);
+                                matching_fields
+                                    .entry(field_ref)
+                                    .or_default()
+                                    .add_term(&expanded_term, field_name);
+                            }
                         }
                     }
                 }
             }
+
+            if clause.presence == Presence::Required && !short_circuit {
+                for field_name in &clause.fields {
+                    required_matches
+                        .entry(field_name.clone())
+                        .and_modify(|opt| {
+                            if let Some(set) = opt {
+                                set.retain(|d| clause_matches.contains(d));
+                            }
+                        })
+                        .or_insert_with(|| Some(clause_matches.clone()));
+                }
+            }
         }
 
+        // Combine field-scoped required and prohibited sets into global sets.
+        let mut all_required: Option<HashSet<String>> = None;
+        for field in &self.fields {
+            if let Some(Some(field_required)) = required_matches.get(field) {
+                all_required = Some(match all_required {
+                    Some(acc) => acc.intersection(field_required).cloned().collect(),
+                    None => field_required.clone(),
+                });
+            }
+        }
+
+        let mut all_prohibited: HashSet<String> = HashSet::new();
+        for field in &self.fields {
+            if let Some(field_prohibited) = prohibited_matches.get(field) {
+                all_prohibited.extend(field_prohibited.iter().cloned());
+            }
+        }
+
+        let is_negated = query.is_negated();
+        let matching_field_refs: Vec<FieldRef> = if is_negated {
+            self.field_vectors.keys().cloned().collect()
+        } else {
+            matching_fields.keys().cloned().collect()
+        };
+
         let mut results: HashMap<String, SearchResult> = HashMap::new();
-        for (field_ref, match_data) in matching_fields {
+        for field_ref in matching_field_refs {
+            let doc_ref = field_ref.doc_ref.clone();
+
+            if !all_required.as_ref().map_or(true, |s| s.contains(&doc_ref)) {
+                continue;
+            }
+            if all_prohibited.contains(&doc_ref) {
+                continue;
+            }
+
             let query_vector = query_vectors.get(&field_ref.field_name).unwrap();
             let field_vector = self
                 .field_vectors
                 .get(&field_ref)
                 .expect("matching field must have a vector");
             let score = query_vector.similarity(field_vector);
-            if score == 0.0 {
+            if score == 0.0 && !is_negated {
                 continue;
             }
 
-            let doc_ref = field_ref.doc_ref.clone();
+            let match_data = if is_negated {
+                MatchData::default()
+            } else {
+                matching_fields.get(&field_ref).cloned().unwrap_or_default()
+            };
+
             match results.get_mut(&doc_ref) {
                 Some(result) => {
                     result.score += score;
@@ -403,7 +529,11 @@ impl Index {
         }
 
         let mut results: Vec<SearchResult> = results.into_values().collect();
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results
     }
 }
@@ -420,27 +550,22 @@ mod tests {
 
     fn test_index() -> Index {
         let mut builder = IndexBuilder::new(en());
-        builder.ref_field("id").field("title", 1.0).field("body", 1.0);
-        builder.add(
-            "a",
-            1.0,
-            |name| match name {
-                "title" => Some("Mr. Green kills Colonel Mustard".to_string()),
-                "body" => Some(
-                    "Mr. Green killed Colonel Mustard in the study with the candlestick.".to_string(),
-                ),
-                _ => None,
-            },
-        );
-        builder.add(
-            "b",
-            1.0,
-            |name| match name {
-                "title" => Some("Plumb water green plants".to_string()),
-                "body" => Some("Professor Plumb has a green plant in his study".to_string()),
-                _ => None,
-            },
-        );
+        builder
+            .ref_field("id")
+            .field("title", 1.0)
+            .field("body", 1.0);
+        builder.add("a", 1.0, |name| match name {
+            "title" => Some("Mr. Green kills Colonel Mustard".to_string()),
+            "body" => Some(
+                "Mr. Green killed Colonel Mustard in the study with the candlestick.".to_string(),
+            ),
+            _ => None,
+        });
+        builder.add("b", 1.0, |name| match name {
+            "title" => Some("Plumb water green plants".to_string()),
+            "body" => Some("Professor Plumb has a green plant in his study".to_string()),
+            _ => None,
+        });
         builder.build()
     }
 
@@ -454,7 +579,7 @@ mod tests {
     #[test]
     fn search_finds_matching_documents() {
         let index = test_index();
-        let results = index.search("green");
+        let results = index.search("green").unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.iter().any(|r| r.ref_id == "a"));
         assert!(results.iter().any(|r| r.ref_id == "b"));
@@ -463,7 +588,46 @@ mod tests {
     #[test]
     fn search_ranks_documents_by_relevance() {
         let index = test_index();
-        let results = index.search("study");
+        let results = index.search("study").unwrap();
         assert_eq!(results[0].ref_id, "b");
+    }
+
+    #[test]
+    fn search_required_term() {
+        let index = test_index();
+        let results = index.search("+green +candlestick").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].ref_id, "a");
+    }
+
+    #[test]
+    fn search_prohibited_term() {
+        let index = test_index();
+        let results = index.search("green -plumb").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].ref_id, "a");
+    }
+
+    #[test]
+    fn search_field_scoped() {
+        let index = test_index();
+        let results = index.search("title:green").unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|r| r.ref_id == "a"));
+        assert!(results.iter().any(|r| r.ref_id == "b"));
+    }
+
+    #[test]
+    fn search_wildcard() {
+        let index = test_index();
+        let results = index.search("pl*").unwrap();
+        assert!(results.iter().any(|r| r.ref_id == "b"));
+    }
+
+    #[test]
+    fn search_fuzzy() {
+        let index = test_index();
+        let results = index.search("stud~1").unwrap();
+        assert!(results.iter().any(|r| r.ref_id == "a" || r.ref_id == "b"));
     }
 }
