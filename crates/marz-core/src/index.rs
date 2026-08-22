@@ -24,7 +24,10 @@ use crate::vector::Vector;
 use crate::{bm25_weight, idf};
 
 /// Marz index serialization format version.
-const INDEX_VERSION: &str = "0.1.0";
+///
+/// This matches lunr.js's target version so that English indexes are
+/// loadable by lunr.js as well as by Marz.
+const INDEX_VERSION: &str = "2.3.9";
 
 /// A reference to one field of one document, formatted as `docRef/fieldName`.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
