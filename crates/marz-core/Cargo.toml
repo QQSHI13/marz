@@ -7,6 +7,16 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Core search engine for Marz, a lunr-compatible offline search library."
+# Symlinks to the repository root, for the same reason python/ has them: cargo
+# packages only what lives inside the crate directory, so `../../LICENSE` is not
+# included and a published crate would carry neither its licence nor its README.
+# Git tracks symlinks and cargo follows them when packaging.
+readme = "README.md"
+# Keeps the benches, examples and the 1.4 MB of test fixtures out of the
+# published tarball. They are needed to develop the crate, not to depend on it,
+# and `cargo publish` verifies the package by building it — with `tests`
+# included it would also need the fixtures to be present and correct.
+include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "WebAssembly bindings for Marz search."
+# Ships to npm as `marz-search`, built by scripts/build-wasm.sh — the artifact
+# consumers want is the compiled .wasm plus wasm-bindgen's JavaScript glue, and
+# neither exists until that build runs. A crates.io copy of the source would be
+# a second, staler way to get the same thing, so there is only one.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

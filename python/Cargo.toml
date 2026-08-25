@@ -7,6 +7,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Python bindings for Marz search."
+# This crate is a CPython extension module, not a Rust library: `crate-type =
+# ["cdylib"]` with `extension-module` links against no Python at build time, so
+# depending on it from Rust does not work. It ships to PyPI as a wheel built by
+# maturin. Publishing it to crates.io would put an unusable crate there under a
+# name that reads like the real library.
+publish = false
 
 [lib]
 name = "marz"
@@ -14,4 +20,15 @@ crate-type = ["cdylib"]
 
 [dependencies]
 marz-core = { workspace = true }
-pyo3 = { version = "0.29", features = ["extension-module"] }
+# `abi3-py310` builds against CPython's stable ABI, so one wheel per platform
+# covers 3.10 and every release after it — including versions that do not exist
+# yet. Without it the release matrix is one wheel per interpreter per platform,
+# and each new CPython needs a rebuild before anyone on it can install: the
+# non-abi3 wheel built here was tagged `cp314-cp314` and would install on
+# nothing else.
+#
+# The cost is that the stable ABI hides some fast paths — concrete-type
+# accessors like PyList_GET_ITEM become real function calls. Nothing here is in
+# a hot loop: the work happens inside marz-core on Rust data, and the boundary
+# is crossed once per document at build time and once per query at search time.
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }

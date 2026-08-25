@@ -80,3 +80,16 @@ size: build-wasm
 
 # Build all bindings
 build-all: build-python build-wasm build-js
+
+# Inspect what each registry would receive, without publishing anything.
+#
+# The npm check is the one that has caught a real bug: the tarball shipped
+# without its WebAssembly, because wasm-pack leaves a `.gitignore` containing `*`
+# in its output directory and npm honours a nested one over `files`. Expect ~8
+# files and ~98 kB. Five files and 6 kB means the engine is missing.
+publish-dry: build-wasm
+    cd js && npm install && npm run build:ts && npm pack --dry-run
+    cargo publish -p marz-core --dry-run
+    cd python && maturin sdist -o ../target/sdist
+    @echo
+    @echo "Nothing was published. See RELEASING.md to cut a real release."

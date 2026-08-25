@@ -133,6 +133,19 @@ a Marz index sits beside lunr.js. See `crates/marz-core/tests/golden.rs`.
 - `tests/fixtures` — the lunr.js ranking oracle, and the hand-written CJK
   expectations that have no oracle
 
+## Install
+
+Nothing is published yet — the first release has not been cut. When it is:
+
+```
+pip install marz          # build indexes (and search them, natively)
+npm install marz-search   # search them in the browser
+```
+
+`marz-core` will be on crates.io for Rust callers. RELEASING.md covers the
+publish setup: all three registries go out from one tag via trusted publishing,
+with no tokens stored in this repository.
+
 ## Development
 
 ```

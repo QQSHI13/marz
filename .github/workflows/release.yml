@@ -1,0 +1,287 @@
+name: Release
+
+# Publishes to PyPI, npm and crates.io from a tag. All three use OpenID Connect
+# rather than long-lived tokens: the registry trusts *this workflow file in this
+# repository*, and each job mints a credential that expires in minutes. There is
+# no secret in this repository to leak, and nothing to rotate.
+#
+# Publishing is close to irreversible — PyPI never allows reuse of a version,
+# crates.io never removes one, npm allows unpublish for 72 hours — so the gate
+# below runs the whole test suite against the exact artifacts being uploaded,
+# and every upload waits on it.
+#
+# To cut a release:
+#   1. bump the version in Cargo.toml [workspace.package] and js/package.json
+#   2. commit, then `git tag v0.1.0 && git push origin v0.1.0`
+# The tag is what triggers this. See RELEASING.md.
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets a release be rehearsed end to end. Every job below stops short of
+  # uploading unless `publish` is true, so a manual run builds each artifact,
+  # runs the gate against it, and uploads nothing.
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Actually publish (leave off for a dry run)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The tag must match the version in the files, or the artifacts get a name the
+  # tag does not describe. Cheap to check, and impossible to fix after upload:
+  # PyPI will not let a version be replaced, so a wrong-versioned publish burns
+  # that number permanently.
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: |
+          cargo_version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          npm_version=$(node -p "require('./js/package.json').version")
+          echo "version=$cargo_version" >> "$GITHUB_OUTPUT"
+
+          if [ "$cargo_version" != "$npm_version" ]; then
+            echo "::error::Cargo.toml says $cargo_version, js/package.json says $npm_version" >&2
+            exit 1
+          fi
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [ "$tag_version" != "$cargo_version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match version $cargo_version" >&2
+              exit 1
+            fi
+          fi
+          echo "Releasing $cargo_version"
+
+  # The same suite CI runs, re-run at the tag. CI having passed on the commit is
+  # not quite the same claim: a tag can point anywhere, including at a commit
+  # that predates a fix or was never pushed to a branch.
+  gate:
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - run: scripts/build-wasm.sh
+      - name: Test the JS bindings
+        working-directory: js
+        run: node --test 'test/*.test.ts'
+
+  # One wheel per platform rather than per interpreter, because the extension is
+  # built against CPython's stable ABI — see the abi3 comment in python/Cargo.toml.
+  wheels:
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64
+          - runner: ubuntu-24.04-arm
+            target: aarch64
+          - runner: macos-latest
+            target: universal2-apple-darwin
+          - runner: windows-latest
+            target: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      # `manylinux: auto` builds the Linux wheels inside a manylinux container,
+      # so they declare a glibc floor old enough to install on. A wheel built
+      # bare on ubuntu-latest is tagged for that runner's glibc and refuses to
+      # install on anything older, which is most production images.
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist --manifest-path python/Cargo.toml
+          target: ${{ matrix.target }}
+          manylinux: auto
+      # A wheel that builds is not a wheel that imports. This installs the
+      # artifact and runs the real suite against it.
+      #
+      # Everything here runs from the repository root, never from `python/`.
+      # `python/marz/` is the package source, so from inside that directory
+      # `import marz` resolves to the source tree and the installed wheel is
+      # never loaded — the job would pass without testing the artifact at all.
+      # `--rootdir` and an explicit path keep pytest's collection honest too.
+      - name: Test the wheel
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install --no-index --find-links dist marz
+          python -c "
+          import marz
+          print('loaded:', marz.__file__)
+          assert 'site-packages' in marz.__file__, 'testing the source tree, not the wheel'
+          b = marz.IndexBuilder('ja', ref_field='location')
+          b.field('title', 10.0)
+          b.field('text')
+          b.add({'location': 'guide/', 'title': '検索エンジン', 'text': '検索エンジンのテスト'})
+          index = b.build()
+          assert [h.ref for h in index.search('検索エンジン')] == ['guide/']
+          assert marz.Index.from_bytes(index.to_bytes(), 'ja').search('検索エンジン')
+          print('wheel imports and searches')
+          "
+          python -m pytest -q python/tests/ --rootdir=.
+      - uses: actions/upload-artifact@v5
+        with:
+          name: wheels-${{ matrix.runner }}-${{ matrix.target }}
+          path: dist
+
+  # A source distribution matters more than usual here: a platform this project
+  # does not build wheels for can still `pip install marz` if it has a Rust
+  # toolchain. Without an sdist that install fails outright.
+  sdist:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist --manifest-path python/Cargo.toml
+      # The sdist must contain the workspace it needs to build. python/Cargo.toml
+      # inherits from the root [workspace.package] and depends on marz-core by
+      # path, and neither is inside python/ — so this is exactly the packaging
+      # mistake that only shows up for the first person to install from source.
+      - name: Check the sdist builds
+        run: |
+          mkdir -p /tmp/sdist-check && tar xzf dist/*.tar.gz -C /tmp/sdist-check
+          python -m pip install --upgrade pip
+          python -m pip install /tmp/sdist-check/*/
+          # From a directory that is *not* the unpacked sdist. Inside it, the
+          # `marz/` source tree shadows the installed package on sys.path and the
+          # import fails with "native extension is not built" — which looks like
+          # a broken sdist and is actually a broken test.
+          cd /tmp && python -c "import marz; print('sdist builds:', marz.languages())"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: sdist
+          path: dist
+
+  pypi:
+    needs: [check-version, wheels, sdist]
+    if: github.ref_type == 'tag' || inputs.publish
+    runs-on: ubuntu-latest
+    # PyPI's trusted publisher is configured against this environment name as
+    # well as the workflow filename. It is also where a required reviewer goes,
+    # if you want a human to approve each publish.
+    environment: pypi
+    permissions:
+      # Mints the OIDC token PyPI exchanges for a short-lived upload token.
+      # Without this the action fails with no credentials rather than falling
+      # back to anything.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v5
+        with:
+          name: sdist
+          path: dist
+      - run: ls -l dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  npm:
+    needs: [check-version, gate]
+    if: github.ref_type == 'tag' || inputs.publish
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      # Trusted publishing needs a newer npm than any Node release bundles.
+      - name: Install a trusted-publishing-capable npm
+        run: npm install -g npm@latest
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Build the package
+        working-directory: js
+        run: |
+          npm install
+          npm run build
+      # The engine has been missing from this tarball before — wasm-pack writes a
+      # `.gitignore` containing `*` into its output directory, npm reads a nested
+      # `.gitignore` as an `.npmignore`, and the result publishes the wrapper
+      # with no WebAssembly beside it. CI checks this too; it is repeated here
+      # because this is the copy that cannot be taken back.
+      - name: Refuse to publish a package with no engine in it
+        working-directory: js
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e '
+            const report = JSON.parse(require("fs").readFileSync("pack.json"));
+            const files = Object.values(report)[0].files.map((f) => f.path);
+            const required = [
+              "pkg/marz_wasm_bg.wasm",
+              "pkg/marz_wasm.js",
+              "dist/index.js",
+            ];
+            const missing = required.filter((f) => !files.includes(f));
+            if (missing.length) {
+              console.error("refusing to publish, tarball omits: " + missing.join(", "));
+              process.exit(1);
+            }
+            console.log("tarball contains the engine: " + files.length + " files");
+          '
+          rm pack.json
+      - name: Publish
+        working-directory: js
+        run: npm publish
+
+  crates:
+    needs: [check-version, gate]
+    if: github.ref_type == 'tag' || inputs.publish
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Exchanges the OIDC token for a short-lived crates.io token and puts it
+      # in CARGO_REGISTRY_TOKEN for the publish below.
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      # marz-core only. marz-wasm and the python crate are `publish = false`:
+      # neither is usable as a Rust dependency, and both ship through the
+      # registry that suits them. See the comments on those manifests.
+      - run: cargo publish -p marz-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
