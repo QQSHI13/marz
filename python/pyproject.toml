@@ -20,7 +20,14 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
 [tool.maturin]
 manifest-path = "Cargo.toml"
 module-name = "marz._marz"
 python-source = "."
+include = ["marz/py.typed", "marz/_marz.pyi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

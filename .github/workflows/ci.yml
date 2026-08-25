@@ -26,7 +26,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v7
       - run: uv tool install maturin
-      - run: cd python && maturin build --release
+      # Build the extension into a venv and run the binding tests against it.
+      # Building the wheel alone would not catch a method that fails to convert
+      # a Python value, since none of that runs until something calls it.
+      - name: Test bindings
+        working-directory: python
+        run: |
+          uv venv
+          uv pip install pytest
+          uv run maturin develop --uv
+          uv run pytest -q
 
   wasm:
     runs-on: ubuntu-latest

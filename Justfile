@@ -12,6 +12,9 @@ check:
 test:
     cargo test --workspace
 
+# Run every test suite
+test-all: test test-python
+
 # Format Rust code
 fmt:
     cargo fmt --all
@@ -23,6 +26,10 @@ lint:
 # Build Python wheel (requires maturin)
 build-python:
     cd python && maturin build --release
+
+# Run the Python binding tests (requires maturin and pytest)
+test-python:
+    cd python && maturin develop && pytest -q
 
 # Build WASM package (requires wasm-pack)
 build-wasm:
