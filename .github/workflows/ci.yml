@@ -90,6 +90,38 @@ jobs:
         working-directory: js
         run: node --test 'test/*.test.ts'
 
+      # A published tarball must contain the engine. `files` in package.json is
+      # not enough on its own: wasm-pack writes a `.gitignore` containing `*`
+      # into its output directory, npm reads a nested `.gitignore` as an
+      # `.npmignore`, and the result packs the TypeScript wrapper with no
+      # WebAssembly beside it — installable, importable, and broken on first
+      # search. scripts/build-wasm.sh removes that file; this proves it.
+      - name: Check the publishable tarball contains the engine
+        working-directory: js
+        run: |
+          npm install
+          npm run build:ts
+          npm pack --dry-run --json > pack.json
+          node -e '
+            // npm 12 keys this object by package name; older npm returned an
+            // array. Take the values either way rather than depending on which.
+            const report = JSON.parse(require("fs").readFileSync("pack.json"));
+            const entry = Object.values(report)[0];
+            const files = entry.files.map((f) => f.path);
+            const required = [
+              "pkg/marz_wasm_bg.wasm",
+              "pkg/marz_wasm.js",
+              "dist/index.js",
+            ];
+            const missing = required.filter((f) => !files.includes(f));
+            if (missing.length) {
+              console.error("npm pack omits: " + missing.join(", "));
+              console.error("packed: " + files.join(", "));
+              process.exit(1);
+            }
+            console.log("tarball contains the engine: " + files.length + " files");
+          '
+
       # The number a page actually pays. wasm-bindgen's gc pass strips most of
       # `cargo build`'s artifact, so this is measured after the full pipeline.
       #

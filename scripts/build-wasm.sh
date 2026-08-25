@@ -49,3 +49,12 @@ fi
 
 "$opt" js/pkg/marz_wasm_bg.wasm -o js/pkg/marz_wasm_bg.wasm \
     -Oz --enable-bulk-memory --enable-nontrapping-float-to-int
+
+# wasm-pack writes a `.gitignore` containing `*` into its output directory, on the
+# assumption that the directory is a standalone package it will publish itself.
+# Here the directory is a subdirectory of the js package, and npm reads nested
+# `.gitignore` files as `.npmignore` — so that one line silently excludes the
+# entire WebAssembly module from `npm pack`, and `files` in package.json cannot
+# override it. The symptom is a published tarball with the wrapper and no engine.
+# js/pkg is ignored at the repository root, so nothing needs this file.
+rm -f js/pkg/.gitignore

@@ -23,7 +23,8 @@
     "build": "npm run build:wasm && npm run build:ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run build:wasm && node --test 'test/*.test.ts'",
-    "test:only": "node --test 'test/*.test.ts'"
+    "test:only": "node --test 'test/*.test.ts'",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "search",
