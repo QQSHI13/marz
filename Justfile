@@ -26,7 +26,7 @@ build-python:
 
 # Build WASM package (requires wasm-pack)
 build-wasm:
-    wasm-pack build crates/marz-wasm --out-dir ../../js/pkg --target web
+    wasm-pack build crates/marz-wasm --out-dir ../../js/pkg --target web --profile wasm-release
 
 # Build JS wrapper (requires npm install in js/)
 build-js:

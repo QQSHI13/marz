@@ -39,4 +39,4 @@ jobs:
           if ! command -v wasm-pack &> /dev/null; then
             cargo install wasm-pack --locked
           fi
-      - run: wasm-pack build crates/marz-wasm --out-dir ../../js/pkg --target web
+      - run: wasm-pack build crates/marz-wasm --out-dir ../../js/pkg --target web --profile wasm-release

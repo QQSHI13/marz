@@ -9,7 +9,7 @@
     "dist"
   ],
   "scripts": {
-    "build:wasm": "wasm-pack build ../crates/marz-wasm --out-dir ../../js/pkg --target web",
+    "build:wasm": "wasm-pack build ../crates/marz-wasm --out-dir ../../js/pkg --target web --profile wasm-release",
     "build:ts": "tsc",
     "build": "npm run build:wasm && npm run build:ts"
   },

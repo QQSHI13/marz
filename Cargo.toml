@@ -12,3 +12,30 @@ rust-version = "1.78"
 
 [workspace.dependencies]
 marz-core = { path = "crates/marz-core" }
+
+[profile.release]
+# Cross-crate inlining. Measured on a 2.9 MB Japanese corpus this is within
+# noise for native search, and it removes 165 KB from the WebAssembly binary by
+# dropping code no caller reaches.
+lto = true
+# Debug symbols are a sixth of the unstripped WebAssembly binary and nothing
+# reads them in a shipped index.
+strip = true
+
+# Size-optimized build for the browser. Used by `npm run build:wasm`.
+#
+# `opt-level = "z"` is not free, which is why it is not in [profile.release]:
+# measured on the same corpus it costs 1.9x on native search (119 ms -> 222 ms
+# for 250 queries) to save 217 KB of WebAssembly. The Python bindings compile
+# against the release profile, so putting it there would hand that slowdown to
+# every native caller in order to shrink a binary they never load.
+#
+# `panic = "abort"` is deliberately absent even here: it made the binary very
+# slightly *larger*, and keeping the profiles' panic strategy uniform means a
+# PyO3 panic still becomes a Python exception rather than a process abort.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+# Worth 9 KB at opt-level = "z", where it gives LTO one unit to work across.
+# It is a slight loss at opt-level = 3, so it stays out of the release profile.
+codegen-units = 1
