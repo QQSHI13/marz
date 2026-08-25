@@ -51,16 +51,21 @@ impl Pipeline {
 
     /// Run the search pipeline: tokenize, trim, and stem the input string.
     ///
-    /// This mirrors lunr's `pipeline.runString`, which tokenizes a query term
-    /// before applying the search-pipeline functions.
-    pub fn run_search(&self, text: &str) -> Vec<String> {
+    /// Returns [`Token`]s rather than bare strings so that callers keep each
+    /// term's position in the query. Positions are what make CJK phrase
+    /// verification possible: a query like `検索エンジン` becomes several
+    /// bigrams, and only their query-side offsets reveal that they were
+    /// contiguous in the original input and so should be contiguous in a
+    /// document too.
+    pub fn run_search(&self, text: &str) -> Vec<Token> {
         let tokens = self.language.tokenize(text);
         let mut output = Vec::new();
         for mut token in tokens {
             if !self.language.trim(&mut token) {
                 continue;
             }
-            output.push(self.language.stem(&token.term));
+            token.term = self.language.stem(&token.term);
+            output.push(token);
         }
         output
     }

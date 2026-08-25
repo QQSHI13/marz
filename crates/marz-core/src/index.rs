@@ -32,6 +32,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::language::LanguageRef;
+use crate::phrase::{extract_phrases, Phrase, VerificationCache, PHRASE_BOOST};
 use crate::pipeline::Pipeline;
 use crate::query::{Presence, Query};
 use crate::query_parser::{parse_query, QueryParseError};
@@ -465,19 +466,59 @@ impl Index {
         }
     }
 
+    /// Boost multiplier for `term` in one document field, from phrase matches.
+    ///
+    /// Returns `1.0` (no change) unless `term` belongs to a query phrase that
+    /// genuinely occurs in this field. Word-tokenized languages never produce
+    /// phrases, so they take the empty-slice fast path and pay nothing.
+    fn phrase_boost_for(
+        &self,
+        phrases: &[Phrase],
+        term: &str,
+        field_name: &str,
+        doc_ref: &str,
+        cache: &mut VerificationCache,
+    ) -> f64 {
+        for (i, phrase) in phrases.iter().enumerate() {
+            if !phrase.contains(term) {
+                continue;
+            }
+            let verified = cache.verify(i, phrase, field_name, doc_ref, |t| {
+                self.inverted_index
+                    .get(t)
+                    .and_then(|posting| posting.fields.get(field_name))
+                    .and_then(|docs| docs.get(doc_ref))
+                    .map(|posting_doc| posting_doc.positions.as_slice())
+            });
+            if verified {
+                return PHRASE_BOOST;
+            }
+        }
+        1.0
+    }
+
     fn execute_query(&self, query: &Query) -> Vec<SearchResult> {
-        // doc_ref -> field_name -> accumulated BM25 score
+        let language = self.pipeline.language();
         let mut scores: HashMap<String, f64> = HashMap::new();
         let mut matching: HashMap<String, MatchData> = HashMap::new();
         let mut required: Option<HashSet<String>> = None;
         let mut prohibited: HashSet<String> = HashSet::new();
         let mut matched_any = false;
+        // Phrase verification is per (phrase, field, document) but is consulted
+        // once per phrase *term*, so the verdict is cached.
+        let mut phrase_cache = VerificationCache::default();
 
         for clause in &query.clauses {
-            let terms = if clause.use_pipeline {
-                self.pipeline.run_search(&clause.term)
+            // Phrases are derived from the pipeline's tokens, so they are only
+            // available when the pipeline ran. A wildcard clause disables it,
+            // and a wildcard is an explicit request for loose matching anyway.
+            let (terms, phrases) = if clause.use_pipeline {
+                let tokens = self.pipeline.run_search(&clause.term);
+                let phrases = extract_phrases(&tokens, &language);
+                let terms: Vec<String> = tokens.into_iter().map(|t| t.term).collect();
+                (terms, phrases)
             } else {
-                vec![clause.term.clone()]
+                (vec![clause.term.clone()], Vec::new())
             };
 
             // Collect the expansions for this clause, deduplicated. A wildcard
@@ -536,11 +577,24 @@ impl Index {
                     };
                     for (doc_ref, posting_doc) in field_docs {
                         matched_any = true;
+
+                        // If this term belongs to a query phrase and that phrase
+                        // actually occurs in this field, the match is a real
+                        // phrase hit rather than a coincidence of overlapping
+                        // n-grams. Boost it.
+                        let phrase_boost = self.phrase_boost_for(
+                            &phrases,
+                            contribution.term,
+                            field_name,
+                            doc_ref,
+                            &mut phrase_cache,
+                        );
+
                         let score = self.score_term(
                             contribution.posting,
                             field_name,
                             doc_ref,
-                            contribution.boost,
+                            contribution.boost * phrase_boost,
                         );
                         *scores.entry(doc_ref.clone()).or_insert(0.0) += score;
                         matching.entry(doc_ref.clone()).or_default().add_term(

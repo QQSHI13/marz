@@ -38,8 +38,18 @@ fn main() {
 
     for query in &args[3..] {
         let tokens: Vec<String> = lang.tokenize(query).into_iter().map(|t| t.term).collect();
+
+        // Time the search itself, repeated, so the number is not dominated by
+        // process startup or index construction.
+        const REPS: u32 = 50;
+        let t0 = std::time::Instant::now();
+        for _ in 0..REPS {
+            let _ = index.search(query).unwrap();
+        }
+        let per_search = t0.elapsed() / REPS;
+
         let results = index.search(query).unwrap();
-        println!("query {query:?}  -> tokens {tokens:?}");
+        println!("query {query:?}  -> tokens {tokens:?}   [{per_search:?}/search]");
         if results.is_empty() {
             println!("  NO RESULTS");
         }
