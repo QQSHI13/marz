@@ -130,12 +130,30 @@ impl TokenSet {
     /// what keeps the recurrence a two-row window instead of requiring the whole
     /// matrix, and at the edit budgets a query realistically uses — one or two —
     /// the distinction does not arise.
+    ///
+    /// # The budget is clamped to below the term's length
+    ///
+    /// An edit budget that reaches a term's own length makes the query
+    /// degenerate: every character can be replaced, so every term of comparable
+    /// length matches. On the Japanese corpus, `検索~2` matched 7,291 of 8,461
+    /// terms — any two-character term is two substitutions from any other — and
+    /// scoring them all took 650 ms to return results that had nothing to do
+    /// with the query.
+    ///
+    /// So `max_edits` is capped at one below the number of characters in `term`,
+    /// which is the weakest rule that rules the degenerate case out: at least
+    /// one character of the query must survive. This costs nothing on the
+    /// word-length terms where fuzzy matching is useful — `keyboard~2` is
+    /// unaffected — and turns `検索~2` back into `検索~1`, which is as much
+    /// fuzziness as a two-character term can carry and still mean anything.
     pub fn expand_fuzzy(&self, term: &str, max_edits: usize) -> Vec<String> {
+        let pattern: Vec<char> = term.chars().collect();
+
+        // At least one character of the query must survive; see above.
+        let max_edits = max_edits.min(pattern.len().saturating_sub(1));
         if max_edits == 0 {
             return self.expand(term);
         }
-
-        let pattern: Vec<char> = term.chars().collect();
 
         // Row zero of the edit matrix: turning the empty candidate into the
         // first j characters of the pattern costs j insertions.
@@ -375,11 +393,14 @@ mod tests {
         // "ca" -> "abc" is three edits. Unrestricted Damerau-Levenshtein would
         // call it two, and accepting it at ~2 would mean the recurrence is
         // reaching further back than the two-row window can justify.
-        assert_eq!(osa_distance("ca", "abc"), 3);
+        //
+        // Both strings carry a "zz" prefix only so the query is long enough that
+        // the length clamp allows a budget of three at all.
+        assert_eq!(osa_distance("zzca", "zzabc"), 3);
         let mut set = TokenSet::new();
-        set.insert("abc");
-        assert!(set.expand_fuzzy("ca", 2).is_empty());
-        assert_eq!(set.expand_fuzzy("ca", 3), vec!["abc".to_string()]);
+        set.insert("zzabc");
+        assert!(set.expand_fuzzy("zzca", 2).is_empty());
+        assert_eq!(set.expand_fuzzy("zzca", 3), vec!["zzabc".to_string()]);
     }
 
     /// Every string of length 1..=`max_len` over `alphabet`, sorted.
@@ -407,22 +428,69 @@ mod tests {
         // Exhaustive over a small alphabet: every candidate the trie yields must
         // be within budget by the oracle, and every term the oracle says is
         // within budget must be yielded. Pruning bugs show up as the latter.
+        //
+        // Queries are compared at the clamped budget, since that is what the
+        // walk is asked to compute — the clamp itself is tested separately.
         let terms = all_strings(&['a', 'b', 'c'], 4);
         let set = TokenSet::from_sorted(&terms);
 
-        for query in ["", "a", "ab", "ba", "abc", "acb", "bacd", "cba", "aabb"] {
+        for query in [
+            "", "a", "ab", "ba", "abc", "acb", "bacd", "cba", "aabb", "abcab",
+        ] {
             for budget in 1..=3 {
+                let effective = budget.min(query.chars().count().saturating_sub(1));
                 let mut actual = set.expand_fuzzy(query, budget);
                 actual.sort();
                 let mut expected: Vec<String> = terms
                     .iter()
-                    .filter(|t| osa_distance(query, t) <= budget)
+                    .filter(|t| osa_distance(query, t) <= effective)
                     .cloned()
                     .collect();
                 expected.sort();
                 assert_eq!(actual, expected, "query {query:?} budget {budget}");
             }
         }
+    }
+
+    #[test]
+    fn the_edit_budget_cannot_reach_the_term_length() {
+        // The degenerate case this rules out: with two edits allowed on a
+        // two-character term, both characters can be replaced, so every
+        // two-character term in the index matches and the query means nothing.
+        // Measured on the Japanese corpus, that was 7,291 of 8,461 terms.
+        let mut set = TokenSet::new();
+        for term in ["検索", "機械", "学習", "模索", "索検"] {
+            set.insert(term);
+        }
+
+        // 模索 is one substitution from 検索 and 索検 is one transposition, so
+        // both stay reachable. 機械 and 学習 share no character and are exactly
+        // two substitutions away — the terms the clamp exists to exclude.
+        let mut two = set.expand_fuzzy("検索", 2);
+        assert_eq!(
+            two.len(),
+            set.expand_fuzzy("検索", 1).len(),
+            "~2 on a two-character term must be clamped to ~1"
+        );
+        two.sort();
+        assert_eq!(two, ["検索", "模索", "索検"].map(String::from).to_vec());
+
+        // A single character admits no edits at all: at ~1 every one-character
+        // term in the index would match.
+        assert_eq!(set.expand_fuzzy("検", 1), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_clamp_does_not_affect_word_length_terms() {
+        // Fuzzy matching is useful on words, and the clamp must not touch them:
+        // "keyboard~2" has eight characters and a budget of two.
+        let mut set = TokenSet::new();
+        set.insert("keyboard");
+        assert_eq!(
+            set.expand_fuzzy("kaybaord", 2),
+            vec!["keyboard".to_string()],
+            "two edits on an eight-character term must still be allowed"
+        );
     }
 
     #[test]
