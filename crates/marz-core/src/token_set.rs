@@ -9,7 +9,7 @@
 //! rather than a thousand times, and a branch whose whole row has run over the
 //! edit budget is abandoned without visiting its descendants.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A node in the token trie.
 #[derive(Default)]
@@ -52,9 +52,16 @@ impl TokenSet {
     /// Terms containing `*` return all matching index terms.
     pub fn expand(&self, term: &str) -> Vec<String> {
         if term.contains('*') {
-            let mut results = Vec::new();
-            self.expand_wildcard(term, &self.root, String::new(), &mut results);
-            results
+            // Runs of `*` are equivalent to a single one, and collapsing them
+            // first keeps the pattern — and so the state space below — short.
+            let pattern = collapse_stars(term);
+            let mut walk = WildcardWalk {
+                pattern: pattern.chars().collect(),
+                visited: HashSet::new(),
+                results: Vec::new(),
+            };
+            walk.visit(&self.root, 0, String::new());
+            walk.results
         } else if self.contains(term) {
             vec![term.to_string()]
         } else {
@@ -71,40 +78,6 @@ impl TokenSet {
             }
         }
         node.final_
-    }
-
-    fn expand_wildcard(
-        &self,
-        pattern: &str,
-        node: &Node,
-        prefix: String,
-        results: &mut Vec<String>,
-    ) {
-        if pattern.is_empty() {
-            if node.final_ {
-                results.push(prefix);
-            }
-            return;
-        }
-
-        let mut chars = pattern.chars();
-        let ch = chars.next().unwrap();
-        let rest: String = chars.collect();
-
-        if ch == '*' {
-            // Zero or more characters
-            self.expand_wildcard(&rest, node, prefix.clone(), results);
-            for (edge_ch, edge_node) in &node.edges {
-                let mut new_prefix = prefix.clone();
-                new_prefix.push(*edge_ch);
-                let new_pattern = format!("*{}", rest);
-                self.expand_wildcard(&new_pattern, edge_node, new_prefix, results);
-            }
-        } else if let Some(edge_node) = node.edges.get(&ch) {
-            let mut new_prefix = prefix;
-            new_prefix.push(ch);
-            self.expand_wildcard(&rest, edge_node, new_prefix, results);
-        }
     }
 
     /// Expand a query term by edit distance, counting a transposition as one
@@ -166,6 +139,72 @@ impl TokenSet {
         };
         walk.visit(&self.root, String::new(), &initial, None);
         walk.results
+    }
+}
+
+/// Collapse every run of `*` in `pattern` to a single `*`.
+fn collapse_stars(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    for ch in pattern.chars() {
+        if ch == '*' && out.ends_with('*') {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// State for one wildcard expansion.
+struct WildcardWalk {
+    pattern: Vec<char>,
+    /// `(node address, pattern position)` pairs already expanded.
+    visited: HashSet<(usize, usize)>,
+    results: Vec<String>,
+}
+
+impl WildcardWalk {
+    /// Match `pattern[at..]` against the subtree at `node`, whose path from the
+    /// root spells `prefix`.
+    ///
+    /// # Why the visited set is needed
+    ///
+    /// A `*` may consume any number of characters, so two adjacent stars can
+    /// reach the same node by many different splits of the same run — `**`
+    /// reaching depth 3 as 0+3, 1+2, 2+1 or 3+0. Each split was previously
+    /// re-expanded from scratch, making the cost exponential in the number of
+    /// stars: on an 8,461-term index, `*` took 172 ms, `***` took 541 ms, and
+    /// `****` did not finish at all.
+    ///
+    /// A trie gives each node exactly one path from the root, so `prefix` is a
+    /// function of `node` — which makes `(node, at)` the complete state, and
+    /// visiting it twice pure duplicated work. Skipping repeats bounds the walk
+    /// at one visit per node per pattern position.
+    fn visit(&mut self, node: &Node, at: usize, prefix: String) {
+        if !self.visited.insert((node as *const Node as usize, at)) {
+            return;
+        }
+
+        if at == self.pattern.len() {
+            if node.final_ {
+                self.results.push(prefix);
+            }
+            return;
+        }
+
+        if self.pattern[at] == '*' {
+            // Match zero characters here, then let the recursion try one more
+            // at each child — between them these cover every length.
+            self.visit(node, at + 1, prefix.clone());
+            for (edge_ch, edge_node) in &node.edges {
+                let mut extended = prefix.clone();
+                extended.push(*edge_ch);
+                self.visit(edge_node, at, extended);
+            }
+        } else if let Some(edge_node) = node.edges.get(&self.pattern[at]) {
+            let mut extended = prefix;
+            extended.push(self.pattern[at]);
+            self.visit(edge_node, at + 1, extended);
+        }
     }
 }
 
@@ -280,6 +319,104 @@ mod tests {
         let mut results = set.expand("*bar");
         results.sort();
         assert_eq!(results, vec!["foobar"]);
+    }
+
+    #[test]
+    fn repeated_stars_mean_the_same_as_one() {
+        // `**` and `****` are not distinct patterns, and before the visited set
+        // each extra star multiplied the work rather than being a no-op.
+        let terms = all_strings(&['a', 'b'], 4);
+        let set = TokenSet::from_sorted(&terms);
+
+        let mut single = set.expand("*");
+        single.sort();
+        assert_eq!(single, terms);
+
+        for stars in 2..=8 {
+            let mut results = set.expand(&"*".repeat(stars));
+            results.sort();
+            assert_eq!(results, terms, "{stars} stars should match every term");
+        }
+    }
+
+    #[test]
+    fn interior_stars_do_not_multiply_the_work() {
+        // The pathological shape: stars separated by literals, each of which can
+        // absorb a different share of the same characters. On a real index this
+        // hung; the assertion here is simply that it terminates and is correct.
+        let terms = all_strings(&['a', 'b', 'c'], 6);
+        let set = TokenSet::from_sorted(&terms);
+
+        let mut results = set.expand("*a*b*c*");
+        results.sort();
+        let mut expected: Vec<String> = terms
+            .iter()
+            .filter(|t| {
+                // A subsequence match on a, b, c in order.
+                let mut needle = ['a', 'b', 'c'].into_iter().peekable();
+                for ch in t.chars() {
+                    if needle.peek() == Some(&ch) {
+                        needle.next();
+                    }
+                }
+                needle.peek().is_none()
+            })
+            .cloned()
+            .collect();
+        expected.sort();
+        assert_eq!(results, expected);
+    }
+
+    #[test]
+    fn a_wildcard_never_yields_the_same_term_twice() {
+        // Duplicates are not merely wasteful: the caller scores each expansion,
+        // so a term returned twice would double that document's score.
+        let terms = all_strings(&['a', 'b'], 5);
+        let set = TokenSet::from_sorted(&terms);
+
+        for pattern in ["*", "**", "*a*", "*a*a*", "***a***", "*a*b*"] {
+            let results = set.expand(pattern);
+            let mut unique = results.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(
+                results.len(),
+                unique.len(),
+                "pattern {pattern:?} yielded duplicates"
+            );
+        }
+    }
+
+    #[test]
+    fn wildcards_match_on_character_boundaries() {
+        // A `*` consumes whole characters, never bytes: it must not be able to
+        // split a three-byte CJK character in half.
+        let mut set = TokenSet::new();
+        for term in ["検索", "検証", "模索"] {
+            set.insert(term);
+        }
+
+        let mut results = set.expand("検*");
+        results.sort();
+        assert_eq!(results, vec!["検索".to_string(), "検証".to_string()]);
+
+        let mut results = set.expand("*索");
+        results.sort();
+        assert_eq!(results, vec!["検索".to_string(), "模索".to_string()]);
+
+        let mut results = set.expand("**");
+        results.sort();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn collapsing_stars_leaves_other_characters_alone() {
+        assert_eq!(collapse_stars("*"), "*");
+        assert_eq!(collapse_stars("****"), "*");
+        assert_eq!(collapse_stars("a**b***c"), "a*b*c");
+        assert_eq!(collapse_stars("abc"), "abc");
+        assert_eq!(collapse_stars(""), "");
+        assert_eq!(collapse_stars("検**索"), "検*索");
     }
 
     #[test]
