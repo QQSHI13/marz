@@ -1,18 +1,37 @@
 {
   "name": "marz-search",
   "version": "0.1.0",
-  "description": "WebAssembly search client for Marz.",
+  "description": "Offline search with first-class CJK support, no segmentation dictionary.",
   "type": "module",
-  "main": "dist/marz.js",
-  "types": "dist/marz.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "files": [
-    "dist"
+    "dist",
+    "pkg/marz_wasm_bg.wasm",
+    "pkg/marz_wasm.js",
+    "pkg/marz_wasm.d.ts"
   ],
   "scripts": {
     "build:wasm": "wasm-pack build ../crates/marz-wasm --out-dir ../../js/pkg --target web --profile wasm-release",
     "build:ts": "tsc",
-    "build": "npm run build:wasm && npm run build:ts"
+    "build": "npm run build:wasm && npm run build:ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build:wasm && node --test 'test/*.test.ts'",
+    "test:only": "node --test 'test/*.test.ts'"
   },
+  "keywords": [
+    "search",
+    "cjk",
+    "wasm",
+    "offline",
+    "full-text-search"
+  ],
   "devDependencies": {
     "typescript": "^7.0.2"
   },

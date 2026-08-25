@@ -205,26 +205,15 @@ pub fn tokenize_cjk(text: &str, bigram_scripts: &[Script]) -> Vec<Token> {
 /// Trimmer suitable for CJK languages: CJK terms are kept as-is, other terms
 /// are stripped of surrounding non-word characters.
 ///
-/// The trim is computed over character boundaries. An earlier byte-index
-/// version (`s[start..end]` using `rfind(..).map(|i| i + 1)`) panicked on any
-/// token whose last word character was multi-byte — which real Chinese,
-/// Japanese and Korean text produces constantly via stray Greek letters,
-/// accented Latin and the Japanese iteration mark `々`.
+/// Trimming goes through [`Token::trim_matching`], which moves the recorded
+/// position along with the term. Trimming the term alone would leave the
+/// position covering the untrimmed span, and every highlight would include the
+/// punctuation the trimmer had just removed.
 pub fn cjk_trim(token: &mut Token) -> bool {
     if token.term.chars().next().is_some_and(is_cjk_char) {
         return !token.term.is_empty();
     }
-    token.update(|s| {
-        let mut word_chars = s.char_indices().filter(|(_, c)| is_word_char(*c));
-        match word_chars.next() {
-            None => String::new(),
-            Some(first) => {
-                let last = word_chars.next_back().unwrap_or(first);
-                s[first.0..last.0 + last.1.len_utf8()].to_string()
-            }
-        }
-    });
-    !token.term.is_empty()
+    token.trim_matching(is_word_char)
 }
 
 fn is_word_char(c: char) -> bool {

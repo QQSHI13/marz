@@ -1,14 +1,23 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "ES2020",
-    "moduleResolution": "node",
+    "target": "ES2022",
+    "module": "ESNext",
+    // "bundler" resolution so the `.js` extension in wasm-pack's generated
+    // import resolves to its `.d.ts`, which is how the WebAssembly surface gets
+    // typed at all.
+    "moduleResolution": "bundler",
     "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // The wrapper uses no Node API — only DOM `fetch` — so no `@types/node`.
+    // The test file's `node:` imports are not type-checked; Node strips types
+    // at runtime without checking them, and the assertions are the check.
+    "types": []
   },
   "include": ["src/**/*"]
 }

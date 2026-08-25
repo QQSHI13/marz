@@ -19,20 +19,7 @@ impl Language for English {
     }
 
     fn trim(&self, token: &mut Token) -> bool {
-        token.update(|s| {
-            let chars: Vec<char> = s.chars().collect();
-            let start = chars
-                .iter()
-                .position(|c| is_word_char(*c))
-                .unwrap_or(chars.len());
-            let end = chars
-                .iter()
-                .rposition(|c| is_word_char(*c))
-                .map(|i| i + 1)
-                .unwrap_or(start);
-            chars[start..end].iter().collect()
-        });
-        !token.term.is_empty()
+        token.trim_matching(is_word_char)
     }
 
     fn is_stop_word(&self, term: &str) -> bool {

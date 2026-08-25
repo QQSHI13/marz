@@ -15,7 +15,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace
       - run: cargo test --workspace
-      - run: cargo clippy --workspace -- -D warnings
+      # --all-targets so examples and tests are linted too: the fixture
+      # generator is an example, and would otherwise never be checked.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
 
   python:
@@ -42,10 +44,38 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      # Node's built-in test runner strips the TypeScript at runtime, so the JS
+      # suite needs no npm install. 22.x is the oldest release that does it.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
       - name: Install wasm-pack
         run: |
           if ! command -v wasm-pack &> /dev/null; then
             cargo install wasm-pack --locked
           fi
       - run: wasm-pack build crates/marz-wasm --out-dir ../../js/pkg --target web --profile wasm-release
+
+      # The optional client-side builder is compiled only under its feature, so
+      # nothing above type-checks it. Lint it on the real target: this code only
+      # ever runs on wasm32, and `js_sys` behaves differently elsewhere.
+      - name: Lint the builder feature
+        run: cargo clippy -p marz-wasm --target wasm32-unknown-unknown --features builder -- -D warnings
+
+      # Exercises the boundary the Rust suite cannot: that tuples arrive as
+      # [start, length] arrays, that failures arrive as real Error objects, and
+      # that highlight offsets survive astral-plane characters.
+      - name: Test the JS bindings
+        working-directory: js
+        run: node --test 'test/*.test.ts'
+
+      # The number a page actually pays. wasm-bindgen's gc pass strips most of
+      # `cargo build`'s artifact, so this is measured after the full pipeline.
+      - name: Report shipped size
+        run: |
+          raw=$(stat -c %s js/pkg/marz_wasm_bg.wasm)
+          gz=$(gzip -9 -c js/pkg/marz_wasm_bg.wasm | wc -c)
+          echo "wasm: $raw bytes raw, $gz bytes gzipped" >> "$GITHUB_STEP_SUMMARY"
