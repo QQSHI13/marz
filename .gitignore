@@ -12,7 +12,7 @@ python/dist/
 python/build/
 
 # JS/WASM
-js/node_modules/
+node_modules/
 js/dist/
 js/pkg/
 

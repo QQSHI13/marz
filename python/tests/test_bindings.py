@@ -248,6 +248,37 @@ class TestResults:
         start, length = hit.matches["検索"]["body"][0]
         assert text[start : start + length] == "検索"
 
+    def test_positions_skip_the_punctuation_the_tokenizer_trimmed(self):
+        # Two bugs at once, and both produce a highlight that is visibly wrong
+        # rather than an exception.
+        #
+        # The astral prefix is there so a byte offset cannot pass: each 🎉 is
+        # four UTF-8 bytes, so "keyboard" starts at character 4 and byte 13.
+        # The trailing period is there so the trimmer has something to remove —
+        # it must shorten the span rather than leave the term's original width,
+        # which would highlight "keyboard." including the period.
+        text = "🎉🎉🎉 keyboard. done"
+        builder = marz.IndexBuilder("en")
+        builder.field("body")
+        builder.add({"id": "x", "body": text})
+        hit = builder.build().search("keyboard")[0]
+
+        start, length = hit.matches["keyboard"]["body"][0]
+        assert (start, length) == (4, 8)
+        assert text[start : start + length] == "keyboard"
+
+    def test_leading_punctuation_shifts_the_position_forward(self):
+        # The other end of the same trim. A term the tokenizer stripped a quote
+        # off of must report where the *word* starts, not where the quote does.
+        text = 'He said "keyboard" loudly'
+        builder = marz.IndexBuilder("en")
+        builder.field("body")
+        builder.add({"id": "x", "body": text})
+        hit = builder.build().search("keyboard")[0]
+
+        start, length = hit.matches["keyboard"]["body"][0]
+        assert text[start : start + length] == "keyboard"
+
     def test_only_positions_are_lost_when_positions_are_dropped(self):
         # A positionless index still reports which terms matched and which
         # fields they matched in — just not where. So a caller can still show

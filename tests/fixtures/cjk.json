@@ -1,0 +1,195 @@
+{
+  "note": [
+    "Hand-specified CJK search expectations. Unlike tests/fixtures/queries.json",
+    "this is NOT generated from an oracle: lunr cannot segment CJK at all, so",
+    "there is no reference implementation to compare against. Every expectation",
+    "here was reasoned about and is explained by its `why`. Changing one means",
+    "deciding the old behaviour was wrong, which is the point — a generated",
+    "fixture would let a regression rewrite itself.",
+    "",
+    "`expect` lists document refs in required rank order. `expect_empty` asserts",
+    "no results. `contains` asserts the refs appear somewhere in the results",
+    "without pinning their order, for cases where ranking between them is not",
+    "the behaviour under test."
+  ],
+  "languages": {
+    "zh": {
+      "documents": [
+        {
+          "id": "zh/search",
+          "title": "全文搜索引擎",
+          "body": "全文搜索引擎使用倒排索引。搜索引擎不需要词典就能工作。"
+        },
+        {
+          "id": "zh/engine",
+          "title": "发动机原理",
+          "body": "发动机是机械装置。这里的引擎指的是发动机，不是搜索引擎。"
+        },
+        {
+          "id": "zh/ml",
+          "title": "机器学习",
+          "body": "机器学习是人工智能的一个分支。统计学习理论是它的基础。"
+        },
+        {
+          "id": "zh/mixed",
+          "title": "Rust 编程语言",
+          "body": "Rust 是一门快速的系统编程语言，适合写搜索引擎。"
+        }
+      ],
+      "cases": [
+        {
+          "query": "搜索",
+          "contains": ["zh/search"],
+          "why": "The core claim: a two-character term is found inside an unspaced run of Han with no dictionary, because both sides tokenize to the same bigram."
+        },
+        {
+          "query": "搜索引擎",
+          "expect": ["zh/search", "zh/engine", "zh/mixed"],
+          "why": "All three contain the phrase; the ranking is the assertion. zh/search carries it in its title and twice in its body, zh/engine once in a body about motors, zh/mixed once in a trailing clause about Rust."
+        },
+        {
+          "query": "机器学习",
+          "contains": ["zh/ml"],
+          "why": "A four-character term spanning three overlapping bigrams. Requires the phrase-verification path, not just bigram presence."
+        },
+        {
+          "query": "倒排索引",
+          "contains": ["zh/search"],
+          "why": "A term that appears only in a body, with no title boost to carry it."
+        },
+        {
+          "query": "rust",
+          "contains": ["zh/mixed"],
+          "why": "Latin script inside a Chinese index still tokenizes on whitespace, so a Chinese-language index remains usable for code identifiers and product names."
+        },
+        {
+          "query": "编程语言",
+          "contains": ["zh/mixed"],
+          "why": "Han immediately following Latin in the same field. A tokenizer that only started a Han run at a field boundary would miss this."
+        },
+        {
+          "query": "词典",
+          "contains": ["zh/search"],
+          "why": "Marz finds the word 'dictionary' without using one."
+        },
+        {
+          "query": "量子力学",
+          "expect_empty": true,
+          "why": "None of these bigrams occur. Bigram tokenization must not make everything match everything."
+        }
+      ]
+    },
+    "ja": {
+      "documents": [
+        {
+          "id": "ja/search",
+          "title": "検索エンジンの仕組み",
+          "body": "検索エンジンは転置索引を使います。形態素解析を使わなくても全文検索はできます。"
+        },
+        {
+          "id": "ja/scattered",
+          "title": "エンジンオイルの話",
+          "body": "検索の話をします。それからエンジンオイルとジンの話もします。機械の話です。"
+        },
+        {
+          "id": "ja/ml",
+          "title": "機械学習の基礎",
+          "body": "機械学習は人工知能の一分野です。統計的な学習理論に基づいています。"
+        },
+        {
+          "id": "ja/widths",
+          "title": "ｶﾞｲﾄﾞ",
+          "body": "ＲＵＳＴで書いた検索エンジン。全角と半角が混ざっています。"
+        },
+        {
+          "id": "ja/iteration",
+          "title": "様々な例",
+          "body": "時々使われる々という記号を含みます。人々の話です。"
+        }
+      ],
+      "cases": [
+        {
+          "query": "検索エンジン",
+          "expect": ["ja/search", "ja/scattered", "ja/widths"],
+          "why": "The phrase-verification case. All three contain the bigrams, but ja/search has them contiguous and in its title, ja/widths has them contiguous in a body, and ja/scattered has 検索 and エンジン as separate words — so it must rank last rather than being excluded."
+        },
+        {
+          "query": "形態素解析",
+          "contains": ["ja/search"],
+          "why": "The name of the technique Marz deliberately does not use, found without using it."
+        },
+        {
+          "query": "機械学習",
+          "expect": ["ja/ml", "ja/scattered"],
+          "why": "Partial matches rank, they do not vanish. ja/scattered contains 機械 but not 機械学習, and still appears — at roughly 1/127th the score. Filtering it would make a CJK query behave as AND while the same query in English behaves as OR, which is a worse surprise than a low-ranked extra hit."
+        },
+        {
+          "query": "ガイド",
+          "contains": ["ja/widths"],
+          "why": "The document spells it in halfwidth katakana with a combining voiced mark; normalization composes both sides to the same three code points. This is why match positions index normalized text."
+        },
+        {
+          "query": "rust",
+          "contains": ["ja/widths"],
+          "why": "The document has fullwidth ＲＵＳＴ. Folding maps it to ASCII, so a user typing on a US keyboard finds it."
+        },
+        {
+          "query": "々",
+          "contains": ["ja/iteration"],
+          "why": "The iteration mark is a single Han-adjacent character that a byte-indexed trimmer used to panic on. Kept as a case because the panic was real."
+        },
+        {
+          "query": "人々",
+          "contains": ["ja/iteration"],
+          "why": "A bigram whose second character is the iteration mark."
+        },
+        {
+          "query": "量子力学",
+          "expect_empty": true,
+          "why": "No matching bigrams anywhere in the corpus."
+        }
+      ]
+    },
+    "ko": {
+      "documents": [
+        {
+          "id": "ko/search",
+          "title": "검색 엔진",
+          "body": "검색엔진은 역색인을 사용합니다. 전문 검색이 가능합니다."
+        },
+        {
+          "id": "ko/scattered",
+          "title": "엔진 오일",
+          "body": "검색 이야기와 엔진 오일 이야기를 합니다. 기계 이야기입니다."
+        },
+        {
+          "id": "ko/ml",
+          "title": "기계 학습",
+          "body": "기계학습은 인공지능의 한 분야입니다."
+        }
+      ],
+      "cases": [
+        {
+          "query": "검색",
+          "contains": ["ko/search", "ko/scattered"],
+          "why": "Korean is written with spaces, so this is ordinary whitespace tokenization — the point is that Marz does not force bigrams on a language that does not need them."
+        },
+        {
+          "query": "검색엔진",
+          "contains": ["ko/search"],
+          "why": "Written as one word in ko/search's body. ko/scattered writes 검색 and 엔진 separately, so a bigram-everything approach would conflate them."
+        },
+        {
+          "query": "기계학습",
+          "contains": ["ko/ml"],
+          "why": "Compound written closed in one document and spaced in its title."
+        },
+        {
+          "query": "양자역학",
+          "expect_empty": true,
+          "why": "None of these syllable blocks occur in the corpus. Korean tokenizes on whitespace, so this also confirms an absent word is absent rather than partially matching a longer one."
+        }
+      ]
+    }
+  }
+}

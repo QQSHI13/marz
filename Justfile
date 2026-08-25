@@ -28,9 +28,11 @@ lint:
 build-python:
     cd python && maturin build --release
 
-# Run the Python binding tests (requires maturin and pytest)
+# Run the Python binding tests. `python -m pytest` rather than bare `pytest` so
+# this uses the interpreter maturin just installed the extension into, instead of
+# whichever pytest happens to be first on PATH.
 test-python:
-    cd python && maturin develop && pytest -q
+    cd python && maturin develop && python -m pytest -q
 
 # Build WASM package (requires wasm-pack)
 build-wasm:
@@ -55,6 +57,15 @@ fixtures:
         js/fixtures/corpus_en.json js/fixtures/en.marz en
     cargo run --example mkfixture -p marz-core -- \
         js/fixtures/corpus_ja.json js/fixtures/ja.marz ja
+
+# Regenerate the English ranking oracle in tests/fixtures from lunr.js.
+#
+# Rarely needed, and never to make a failing test pass: a diff here means either
+# the corpus changed or Marz's ranking did, and only the first is a reason to
+# regenerate. lunr.js — not lunr.py — is the oracle; see
+# crates/marz-core/tests/golden.rs for why the two cannot both be matched.
+golden:
+    cd tests && npm install && node generate_golden.js
 
 # Report the shipped size of the WebAssembly module, which is what a page pays.
 # `cargo build`'s artifact is roughly three times this: wasm-bindgen's gc pass

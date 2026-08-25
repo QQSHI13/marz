@@ -2,74 +2,131 @@
   "marz": [
     {
       "ref": "page-a/",
-      "score": 11.53
+      "score": 12.985
     }
   ],
   "install": [
     {
       "ref": "page-a/",
-      "score": 11.53
+      "score": 12.985
     }
   ],
   "installing": [
     {
       "ref": "page-a/",
-      "score": 11.53
+      "score": 12.985
     }
   ],
   "running": [
     {
       "ref": "page-d/",
-      "score": 11.985
+      "score": 13.499
     }
   ],
   "walk": [
     {
       "ref": "page-d/",
-      "score": 2.026
+      "score": 2.217
+    }
+  ],
+  "deploy": [
+    {
+      "ref": "page-g/",
+      "score": 13.499
+    }
+  ],
+  "deploying": [
+    {
+      "ref": "page-g/",
+      "score": 13.499
+    }
+  ],
+  "fly": [
+    {
+      "ref": "page-g/",
+      "score": 13.499
+    }
+  ],
+  "flies": [
+    {
+      "ref": "page-g/",
+      "score": 13.499
+    }
+  ],
+  "tried": [
+    {
+      "ref": "page-g/",
+      "score": 1.586
     }
   ],
   "the": [],
   "foo*": [
     {
       "ref": "page-f/",
-      "score": 16.638223
+      "score": 18.736915
     },
     {
       "ref": "page-b/",
-      "score": 1.021769
+      "score": 1.121471
     }
   ],
   "*bar": [
     {
       "ref": "page-f/",
-      "score": 23.53
+      "score": 26.498
     }
   ],
-  "hello~1": [],
-  "helo~1": [],
+  "*oo*": [
+    {
+      "ref": "page-f/",
+      "score": 30.597255
+    },
+    {
+      "ref": "page-b/",
+      "score": 0.915678
+    }
+  ],
+  "ofline~1": [
+    {
+      "ref": "page-a/",
+      "score": 1.478
+    }
+  ],
+  "ofline~0": [],
+  "instal~1": [
+    {
+      "ref": "page-a/",
+      "score": 12.985
+    }
+  ],
   "title:search": [
     {
       "ref": "page-b/",
-      "score": 8.896
+      "score": 9.996
     }
   ],
   "text:foobar": [
     {
       "ref": "page-f/",
-      "score": 2.269
+      "score": 2.583
+    }
+  ],
+  "title:foobar": [
+    {
+      "ref": "page-f/",
+      "score": 23.915
     }
   ],
   "+marz +engine": [
     {
       "ref": "page-a/",
-      "score": 9.104
+      "score": 10.226885
     }
   ],
   "+search +wildcards": [
     {
       "ref": "page-b/",
-      "score": 7.312191
+      "score": 8.189711
     }
   ],
   "marz -offline": [],
@@ -93,22 +150,44 @@
     {
       "ref": "page-f/",
       "score": 0
+    },
+    {
+      "ref": "page-g/",
+      "score": 0
     }
   ],
+  "+fox": [
+    {
+      "ref": "page-e/",
+      "score": 11.023
+    }
+  ],
+  "+fox -dog": [],
   "foobar^5": [
     {
       "ref": "page-f/",
-      "score": 23.53
+      "score": 26.498
     }
   ],
   "marz search": [
     {
       "ref": "page-a/",
-      "score": 8.78863
+      "score": 9.90798
     },
     {
       "ref": "page-b/",
-      "score": 6.290422
+      "score": 7.068239
     }
-  ]
+  ],
+  "run walk fast": [
+    {
+      "ref": "page-d/",
+      "score": 15.977591
+    },
+    {
+      "ref": "page-a/",
+      "score": 0.592939
+    }
+  ],
+  "xylophone": []
 }

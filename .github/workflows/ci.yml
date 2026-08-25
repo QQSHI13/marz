@@ -20,6 +20,24 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
 
+  # The committed fixture must be what the generator produces. Without this the
+  # two can drift: someone edits an expectation by hand to make a test pass, and
+  # the fixture stops being an oracle and becomes a record of the bug.
+  golden-fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Regenerate from lunr.js
+        working-directory: tests
+        run: |
+          npm ci
+          node generate_golden.js
+      - name: Fail if the fixture is not what lunr.js produces
+        run: git diff --exit-code -- tests/fixtures/
+
   python:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,5 @@
+{
+  "implementation": "lunr.js",
+  "version": "2.3.9",
+  "note": "Ranking oracle. Scores are lunr's asymmetric cosine similarity and are recorded for reference only — Marz asserts ranking, not magnitude. See crates/marz-core/tests/golden.rs."
+}

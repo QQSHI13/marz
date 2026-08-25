@@ -5,10 +5,14 @@ build-backend = "maturin"
 [project]
 name = "marz"
 version = "0.1.0"
-description = "Offline search engine for docsforge, replacing lunr + lunr-languages + jieba."
-readme = "../README.md"
+description = "Offline search engine with first-class CJK support and no segmentation dictionary."
+# Symlinks to the repository root. Packaging metadata cannot reference paths
+# outside the project directory (`../README.md` is rejected outright), and
+# duplicating a 202-line licence into a subdirectory invites the two copies to
+# drift. Git tracks symlinks, so a fresh clone builds.
+readme = "README.md"
 license = "Apache-2.0"
-license-files = ["../LICENSE"]
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",

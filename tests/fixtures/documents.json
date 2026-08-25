@@ -29,5 +29,10 @@
     "title": "Boosted foobar",
     "text": "This document has a foobar term and is boosted.",
     "_boost": 2
+  },
+  {
+    "location": "page-g/",
+    "title": "Deploying and flying",
+    "text": "Deploy the fleet. Flies fly, and we tried to deploy."
   }
 ]
