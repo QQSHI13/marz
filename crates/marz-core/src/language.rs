@@ -41,6 +41,17 @@ pub trait Language: Send + Sync {
     fn pipeline_labels(&self) -> Vec<&'static str> {
         Vec::new()
     }
+
+    /// Return `true` if `c` belongs to a script this language tokenizes into
+    /// overlapping n-grams.
+    ///
+    /// Query handling needs this. A query term in an n-grammed script expands
+    /// into several bigrams that must be *adjacent* in a document to count as a
+    /// phrase match, whereas a word-tokenized term stands alone. Without this
+    /// hook the query layer cannot tell the two cases apart.
+    fn is_ngram_script(&self, _c: char) -> bool {
+        false
+    }
 }
 
 /// A language handle used throughout the engine.
@@ -73,11 +84,16 @@ impl Language for MultiLanguage {
     }
 
     fn tokenize(&self, text: &str) -> Vec<Token> {
+        // Deduplicate on (term, position) rather than term alone. Deduplicating
+        // on the term would collapse repeated words in a document down to one
+        // occurrence, destroying both the term frequency and the positions that
+        // CJK phrase matching depends on.
         let mut seen = std::collections::HashSet::new();
         let mut tokens = Vec::new();
         for lang in &self.languages {
             for token in lang.tokenize(text) {
-                if seen.insert(token.term.clone()) {
+                let key = (token.term.clone(), token.position());
+                if seen.insert(key) {
                     tokens.push(token);
                 }
             }
@@ -105,5 +121,9 @@ impl Language for MultiLanguage {
             result = lang.stem(&result);
         }
         result
+    }
+
+    fn is_ngram_script(&self, c: char) -> bool {
+        self.languages.iter().any(|l| l.is_ngram_script(c))
     }
 }

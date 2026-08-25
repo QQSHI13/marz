@@ -1,20 +1,23 @@
 //! Japanese language implementation.
 //!
-//! Uses the same CJK n-gram approach as Chinese, treating Han, Hiragana, and
-//! Katakana as script characters. This is a lightweight, fully offline
-//! alternative to dictionary-based morphological analyzers.
+//! Han, Hiragana and Katakana runs are each bigrammed independently, so no
+//! bigram spans a script change. Japanese switches script at morpheme
+//! boundaries — `検索エンジン` is Han + Katakana, `日本語の検索` puts the
+//! particle `の` in its own Hiragana run — so script segmentation recovers real
+//! word boundaries with no dictionary at all. That is why `検索` comes out as a
+//! clean term here while a naive whole-string bigrammer would also emit the
+//! meaningless `索エ`.
 
 use crate::language::Language;
-use crate::languages::cjk::{cjk_trim, is_cjk_ideograph, is_hiragana, is_katakana, tokenize_cjk};
+use crate::languages::cjk::{cjk_trim, script_of, tokenize_cjk, Script, CJK_SEPARATORS};
 use crate::token::Token;
 
 /// Japanese language configuration.
 #[derive(Debug, Clone, Default)]
 pub struct Japanese;
 
-fn is_japanese_char(c: char) -> bool {
-    is_cjk_ideograph(c) || is_hiragana(c) || is_katakana(c)
-}
+/// Scripts that are bigrammed for Japanese.
+const JA_SCRIPTS: &[Script] = &[Script::Han, Script::Hiragana, Script::Katakana];
 
 impl Language for Japanese {
     fn code(&self) -> &str {
@@ -22,7 +25,7 @@ impl Language for Japanese {
     }
 
     fn tokenize(&self, text: &str) -> Vec<Token> {
-        tokenize_cjk(text, is_japanese_char)
+        tokenize_cjk(text, JA_SCRIPTS)
     }
 
     fn trim(&self, token: &mut Token) -> bool {
@@ -38,7 +41,11 @@ impl Language for Japanese {
     }
 
     fn separator_chars(&self) -> &str {
-        " \t\n\r\x0C\x0B\x0D\u{00A0}"
+        CJK_SEPARATORS
+    }
+
+    fn is_ngram_script(&self, c: char) -> bool {
+        JA_SCRIPTS.contains(&script_of(c))
     }
 }
 
@@ -46,12 +53,33 @@ impl Language for Japanese {
 mod tests {
     use super::*;
 
+    fn terms(text: &str) -> Vec<String> {
+        Japanese
+            .tokenize(text)
+            .iter()
+            .map(|t| t.term.clone())
+            .collect()
+    }
+
     #[test]
     fn japanese_tokenizes_mixed_script() {
-        let ja = Japanese;
-        let tokens = ja.tokenize("日本語の検索");
-        let terms: Vec<_> = tokens.iter().map(|t| t.term.clone()).collect();
-        assert!(terms.contains(&"日本".to_string()));
-        assert!(terms.contains(&"検索".to_string()));
+        let t = terms("日本語の検索");
+        // 日本語 (Han) / の (Hiragana) / 検索 (Han)
+        assert!(t.contains(&"日本".to_string()), "got {t:?}");
+        assert!(t.contains(&"検索".to_string()), "got {t:?}");
+        // The lone particle survives as a unigram since its run has length 1.
+        assert!(t.contains(&"の".to_string()), "got {t:?}");
+    }
+
+    #[test]
+    fn no_bigram_spans_han_katakana_boundary() {
+        let t = terms("検索エンジン");
+        assert_eq!(t, ["検索", "エン", "ンジ", "ジン"]);
+        assert!(!t.contains(&"索エ".to_string()), "got {t:?}");
+    }
+
+    #[test]
+    fn halfwidth_katakana_matches_fullwidth() {
+        assert_eq!(terms("ｶﾞｲﾄﾞ"), terms("ガイド"));
     }
 }

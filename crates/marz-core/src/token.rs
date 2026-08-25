@@ -59,6 +59,17 @@ impl Token {
         self.term = f(&self.term);
         self
     }
+
+    /// Return the `(start, length)` position metadata, if present.
+    ///
+    /// Positions are measured in characters, not bytes, so they stay valid for
+    /// CJK text.
+    pub fn position(&self) -> Option<(usize, usize)> {
+        match self.metadata.get(POSITION) {
+            Some(TokenMetadata::Pair(start, len)) => Some((*start, *len)),
+            _ => None,
+        }
+    }
 }
 
 impl From<&str> for Token {

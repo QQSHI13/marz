@@ -8,6 +8,7 @@
 pub mod index;
 pub mod language;
 pub mod languages;
+pub mod normalize;
 pub mod pipeline;
 pub mod query;
 pub mod query_parser;
