@@ -5,6 +5,7 @@ pub mod cjk;
 pub mod english;
 pub mod japanese;
 pub mod korean;
+pub mod porter;
 
 pub use chinese::Chinese;
 pub use english::English;

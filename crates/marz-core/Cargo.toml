@@ -9,7 +9,6 @@ rust-version.workspace = true
 description = "Core search engine for Marz, a lunr-compatible offline search library."
 
 [dependencies]
-regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
