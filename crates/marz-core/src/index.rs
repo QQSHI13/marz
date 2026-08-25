@@ -150,12 +150,19 @@ impl MatchData {
     /// same indexed term through a clause more than once, and without this the
     /// same position is reported repeatedly.
     pub fn add_term(&mut self, term: &str, field: &str, positions: &[(usize, usize)]) {
-        let entry = self
-            .terms
-            .entry(term.to_string())
-            .or_default()
-            .entry(field.to_string())
-            .or_default();
+        // `entry` would need an owned key to ask the question, so it allocates a
+        // `String` for the term and another for the field on every call and drops
+        // both again whenever the key is already present — which, in a query that
+        // scores a term across thousands of documents, is almost every call. The
+        // extra lookup is cheaper than the allocation it replaces.
+        if !self.terms.contains_key(term) {
+            self.terms.insert(term.to_string(), HashMap::new());
+        }
+        let fields = self.terms.get_mut(term).expect("just inserted");
+        if !fields.contains_key(field) {
+            fields.insert(field.to_string(), Vec::new());
+        }
+        let entry = fields.get_mut(field).expect("just inserted");
         for position in positions {
             if !entry.contains(position) {
                 entry.push(*position);
@@ -380,6 +387,15 @@ struct Contribution<'a> {
     term: &'a str,
     posting: &'a Posting,
     boost: f64,
+    /// IDF for this term, computed once here rather than per scored document.
+    ///
+    /// `Posting::document_frequency` builds a `HashSet` over every document in
+    /// the posting list, so calling it from the scoring loop made scoring a term
+    /// quadratic in the number of documents containing it — 3.2 s for a
+    /// two-term query over 5,000 documents, against 74 ms over 1,000. IDF is a
+    /// property of the term and the corpus, so nothing in the inner loop can
+    /// change it.
+    idf: f64,
 }
 
 impl Index {
@@ -400,7 +416,18 @@ impl Index {
     }
 
     /// BM25 score for one term occurrence in one document field.
-    fn score_term(&self, posting: &Posting, field_name: &str, doc_ref: &str, boost: f64) -> f64 {
+    ///
+    /// `idf_value` is passed in rather than derived from `posting`, because it
+    /// depends only on the term and is therefore loop-invariant — see
+    /// [`Contribution::idf`].
+    fn score_term(
+        &self,
+        posting: &Posting,
+        field_name: &str,
+        doc_ref: &str,
+        boost: f64,
+        idf_value: f64,
+    ) -> f64 {
         let Some(posting_doc) = posting
             .fields
             .get(field_name)
@@ -436,7 +463,6 @@ impl Index {
             .unwrap_or(1.0);
         let doc_boost = self.stats.doc_boosts.get(doc_ref).copied().unwrap_or(1.0);
 
-        let idf_value = idf(self.stats.document_count, posting.document_frequency());
         let weight = bm25_weight(
             idf_value,
             posting_doc.term_frequency as f64,
@@ -499,10 +525,15 @@ impl Index {
 
     fn execute_query(&self, query: &Query) -> Vec<SearchResult> {
         let language = self.pipeline.language();
-        let mut scores: HashMap<String, f64> = HashMap::new();
-        let mut matching: HashMap<String, MatchData> = HashMap::new();
-        let mut required: Option<HashSet<String>> = None;
-        let mut prohibited: HashSet<String> = HashSet::new();
+        // Keyed by `&str` borrowed from `self.inverted_index`, which outlives the
+        // query. Owning these meant a `String` allocation per document per term
+        // in each of three maps, and the scoring loop runs once per matched
+        // document — so on a query matching the whole corpus the allocator was
+        // doing more work than the scorer.
+        let mut scores: HashMap<&str, f64> = HashMap::new();
+        let mut matching: HashMap<&str, MatchData> = HashMap::new();
+        let mut required: Option<HashSet<&str>> = None;
+        let mut prohibited: HashSet<&str> = HashSet::new();
         let mut matched_any = false;
         // Phrase verification is per (phrase, field, document) but is consulted
         // once per phrase *term*, so the verdict is cached.
@@ -540,17 +571,18 @@ impl Index {
                             term: key.as_str(),
                             posting,
                             boost: clause.boost,
+                            idf: idf(self.stats.document_count, posting.document_frequency()),
                         });
                     }
                 }
             }
 
             // Documents matched by this clause, per the clause's field scope.
-            let mut clause_docs: HashSet<String> = HashSet::new();
+            let mut clause_docs: HashSet<&str> = HashSet::new();
             for contribution in &contributions {
                 for field_name in &clause.fields {
                     if let Some(field_docs) = contribution.posting.fields.get(field_name) {
-                        clause_docs.extend(field_docs.keys().cloned());
+                        clause_docs.extend(field_docs.keys().map(String::as_str));
                     }
                 }
             }
@@ -563,7 +595,7 @@ impl Index {
                 Presence::Required => {
                     // Intersect: a document must satisfy every required clause.
                     required = Some(match required {
-                        Some(acc) => acc.intersection(&clause_docs).cloned().collect(),
+                        Some(acc) => acc.intersection(&clause_docs).copied().collect(),
                         None => clause_docs.clone(),
                     });
                 }
@@ -595,9 +627,10 @@ impl Index {
                             field_name,
                             doc_ref,
                             contribution.boost * phrase_boost,
+                            contribution.idf,
                         );
-                        *scores.entry(doc_ref.clone()).or_insert(0.0) += score;
-                        matching.entry(doc_ref.clone()).or_default().add_term(
+                        *scores.entry(doc_ref.as_str()).or_insert(0.0) += score;
+                        matching.entry(doc_ref.as_str()).or_default().add_term(
                             contribution.term,
                             field_name,
                             &posting_doc.positions,
@@ -614,10 +647,10 @@ impl Index {
             let mut results: Vec<SearchResult> = self
                 .all_doc_refs()
                 .into_iter()
-                .filter(|d| !prohibited.contains(d))
+                .filter(|d| !prohibited.contains(*d))
                 .filter(|d| satisfies_required(required.as_ref(), d))
                 .map(|doc_ref| SearchResult {
-                    ref_id: doc_ref,
+                    ref_id: doc_ref.to_string(),
                     score: 0.0,
                     match_data: MatchData::default(),
                 })
@@ -631,8 +664,8 @@ impl Index {
             .filter(|(doc_ref, _)| !prohibited.contains(doc_ref))
             .filter(|(doc_ref, _)| satisfies_required(required.as_ref(), doc_ref))
             .map(|(doc_ref, score)| SearchResult {
-                match_data: matching.get(&doc_ref).cloned().unwrap_or_default(),
-                ref_id: doc_ref,
+                match_data: matching.get(doc_ref).cloned().unwrap_or_default(),
+                ref_id: doc_ref.to_string(),
                 score,
             })
             .collect();
@@ -647,12 +680,12 @@ impl Index {
     }
 
     /// Every document reference known to the index.
-    fn all_doc_refs(&self) -> Vec<String> {
+    fn all_doc_refs(&self) -> Vec<&str> {
         let mut refs: HashSet<&str> = HashSet::new();
         for field_ref in self.stats.field_lengths.keys() {
             refs.insert(field_ref.doc_ref.as_str());
         }
-        refs.into_iter().map(String::from).collect()
+        refs.into_iter().collect()
     }
 
     /// Serialize the index to a JSON string.
@@ -937,7 +970,7 @@ impl Index {
 ///
 /// Written out rather than using `Option::is_none_or`, which needs Rust 1.82
 /// and would raise the crate's 1.78 MSRV.
-fn satisfies_required(required: Option<&HashSet<String>>, doc_ref: &str) -> bool {
+fn satisfies_required(required: Option<&HashSet<&str>>, doc_ref: &str) -> bool {
     match required {
         Some(set) => set.contains(doc_ref),
         None => true,

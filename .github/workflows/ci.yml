@@ -75,7 +75,7 @@ jobs:
           if ! command -v wasm-pack &> /dev/null; then
             cargo install wasm-pack --locked
           fi
-      - run: wasm-pack build crates/marz-wasm --out-dir ../../js/pkg --target web --profile wasm-release
+      - run: scripts/build-wasm.sh
 
       # The optional client-side builder is compiled only under its feature, so
       # nothing above type-checks it. Lint it on the real target: this code only
@@ -92,8 +92,21 @@ jobs:
 
       # The number a page actually pays. wasm-bindgen's gc pass strips most of
       # `cargo build`'s artifact, so this is measured after the full pipeline.
+      #
+      # The ceiling is asserted, not just reported. The README quotes this number
+      # as a headline feature, and a silently unoptimized build — which is what a
+      # wasm-opt failure produces, since wasm-pack ships the module anyway — costs
+      # 16 KB while looking like a green build. The limit is deliberately loose:
+      # it should catch that class of accident, not force a bump for every honest
+      # kilobyte. Raise it and update the README together.
       - name: Report shipped size
         run: |
           raw=$(stat -c %s js/pkg/marz_wasm_bg.wasm)
           gz=$(gzip -9 -c js/pkg/marz_wasm_bg.wasm | wc -c)
           echo "wasm: $raw bytes raw, $gz bytes gzipped" >> "$GITHUB_STEP_SUMMARY"
+          limit=185000
+          if [ "$raw" -gt "$limit" ]; then
+            echo "::error::wasm is $raw bytes, over the $limit byte limit." \
+                 "If wasm-opt failed above, that is the cause." >&2
+            exit 1
+          fi

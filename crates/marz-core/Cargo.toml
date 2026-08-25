@@ -14,3 +14,11 @@ serde_json = "1"
 
 [dev-dependencies]
 criterion = "0.5"
+
+# Criterion supplies its own `main`. Without this the libtest harness is linked
+# in too and consumes the command line first, so `--save-baseline`,
+# `--measurement-time` and every other criterion flag is rejected as an unknown
+# test option — the benches run, but only ever with default settings.
+[[bench]]
+name = "search"
+harness = false

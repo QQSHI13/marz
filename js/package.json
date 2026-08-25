@@ -18,7 +18,7 @@
     "pkg/marz_wasm.d.ts"
   ],
   "scripts": {
-    "build:wasm": "wasm-pack build ../crates/marz-wasm --out-dir ../../js/pkg --target web --profile wasm-release",
+    "build:wasm": "../scripts/build-wasm.sh",
     "build:ts": "tsc",
     "build": "npm run build:wasm && npm run build:ts",
     "typecheck": "tsc --noEmit",

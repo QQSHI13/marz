@@ -22,3 +22,22 @@ builder = []
 marz-core = { workspace = true }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
+
+# wasm-opt defaults to a WebAssembly baseline older than the one rustc now emits,
+# and rejects the module rather than passing it through: LLVM lowers large copies
+# to `memory.copy` (bulk memory) and float→int casts to `i32.trunc_sat_f64_u`
+# (non-trapping float-to-int). Without these flags the optimize step fails,
+# wasm-pack prints the error and ships the *unoptimized* module — which still
+# works, so the only symptom is the reported size jumping from 175 KB to 191 KB.
+#
+# Both features shipped in every major browser by 2020, well below what
+# wasm-bindgen's own output already requires, so enabling them costs no reach.
+#
+# Applies to `--release` and `--profiling`. wasm-pack 0.15 does not read this
+# metadata for a custom `--profile` name, so the `wasm-release` profile the
+# Justfile builds with runs wasm-opt as a separate step; see `just build-wasm`.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+
+[package.metadata.wasm-pack.profile.profiling]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]

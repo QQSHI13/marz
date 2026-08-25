@@ -34,13 +34,15 @@ build-python:
 test-python:
     cd python && maturin develop && python -m pytest -q
 
-# Build WASM package (requires wasm-pack)
+# Build the shipped WASM package. See scripts/build-wasm.sh for why wasm-opt runs
+# as a separate step with explicit feature flags — the short version is that
+# wasm-pack ships an unoptimized module on wasm-opt failure without failing.
 build-wasm:
-    wasm-pack build crates/marz-wasm --out-dir ../../js/pkg --target web --profile wasm-release
+    scripts/build-wasm.sh
 
 # Build WASM with the client-side index builder included
 build-wasm-builder:
-    wasm-pack build crates/marz-wasm --out-dir ../../js/pkg --target web --profile wasm-release -- --features builder
+    scripts/build-wasm.sh --features builder
 
 # Build JS wrapper (requires npm install in js/)
 build-js:
@@ -70,7 +72,8 @@ golden:
 # Report the shipped size of the WebAssembly module, which is what a page pays.
 # `cargo build`'s artifact is roughly three times this: wasm-bindgen's gc pass
 # strips the unreachable half, so measuring the cargo output overstates
-# everything and misattributes where the bytes went.
+# everything and misattributes where the bytes went. CI asserts a ceiling on this
+# number; see the `wasm` job in .github/workflows/ci.yml.
 size: build-wasm
     @ls -l js/pkg/marz_wasm_bg.wasm | awk '{print $5 " bytes raw"}'
     @gzip -9 -c js/pkg/marz_wasm_bg.wasm | wc -c | awk '{print $1 " bytes gzipped"}'
