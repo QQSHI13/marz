@@ -797,6 +797,124 @@ impl Index {
         })
     }
 
+    /// Serialize the index to the compact binary format.
+    ///
+    /// Roughly a fifth the size of [`Index::to_json`] output. Pass
+    /// `include_positions = false` to drop highlighting and CJK phrase
+    /// verification data for a further saving of about a tenth.
+    pub fn to_binary(&self, include_positions: bool) -> Vec<u8> {
+        crate::binary::writer::write_index(&crate::binary::writer::IndexSnapshot {
+            language: self.pipeline.language().code(),
+            fields: &self.fields,
+            field_boosts: &self.stats.field_boosts,
+            pipeline: self.pipeline.labels(),
+            document_count: self.stats.document_count,
+            doc_boosts: &self.stats.doc_boosts,
+            field_lengths: &self.stats.field_lengths,
+            inverted_index: &self.inverted_index,
+            k1: self.stats.k1,
+            b: self.stats.b,
+            include_positions,
+        })
+    }
+
+    /// Load an index from the binary format.
+    ///
+    /// This materializes the postings into the same in-memory structures
+    /// [`Index::load`] builds, so search behaves identically. It is the
+    /// convenient path, not the zero-copy one — use [`crate::BinaryIndex`]
+    /// directly to read postings straight out of a mapped buffer.
+    ///
+    /// The `language` must match the one the index was built with; a mismatch
+    /// makes query tokenization disagree with the indexed terms.
+    pub fn from_binary(
+        bytes: &[u8],
+        language: LanguageRef,
+    ) -> Result<Self, crate::binary::FormatError> {
+        let binary = crate::binary::BinaryIndex::open(bytes)?;
+
+        // Resolve ids to strings once. A posting list references a document by
+        // id many times over, so decoding the reference per reference would make
+        // loading quadratic in the worst case.
+        let doc_refs: Vec<String> = (0..binary.doc_count() as u32)
+            .map(|id| binary.doc_ref(id).map(str::to_string))
+            .collect::<Result<_, _>>()?;
+        let fields = binary.fields().to_vec();
+        let has_positions = binary.header().has_positions();
+
+        let terms = binary.terms()?;
+        let mut inverted_index: BTreeMap<String, Posting> = BTreeMap::new();
+        for (term_id, term) in terms.into_iter().enumerate() {
+            let decoded = binary.postings(term_id as u32)?;
+            let mut posting = Posting::default();
+            for field_postings in &decoded.fields {
+                let field_name = binary.field_name(field_postings.field_id)?.to_string();
+                let mut docs: HashMap<String, PostingDoc> =
+                    HashMap::with_capacity(field_postings.entries.len());
+                for entry in &field_postings.entries {
+                    let doc_ref = doc_refs
+                        .get(entry.doc_id as usize)
+                        .ok_or(crate::binary::FormatError::InvalidDocId(entry.doc_id))?;
+                    let positions = if has_positions {
+                        binary.positions(entry)?
+                    } else {
+                        Vec::new()
+                    };
+                    docs.insert(
+                        doc_ref.clone(),
+                        PostingDoc {
+                            term_frequency: entry.term_frequency,
+                            positions,
+                        },
+                    );
+                }
+                posting.fields.insert(field_name, docs);
+            }
+            inverted_index.insert(term, posting);
+        }
+
+        let mut field_lengths: HashMap<FieldRef, usize> = HashMap::new();
+        for (doc_id, doc_ref) in doc_refs.iter().enumerate() {
+            for (field_id, field_name) in fields.iter().enumerate() {
+                let length = binary.field_length(doc_id as u32, field_id as u32)?;
+                field_lengths.insert(
+                    FieldRef::new(doc_ref.clone(), field_name.clone()),
+                    length as usize,
+                );
+            }
+        }
+
+        let mut field_boosts = HashMap::with_capacity(fields.len());
+        for (field_id, field_name) in fields.iter().enumerate() {
+            field_boosts.insert(field_name.clone(), binary.field_boost(field_id as u32)?);
+        }
+
+        let mut doc_boosts = HashMap::with_capacity(doc_refs.len());
+        for (doc_id, doc_ref) in doc_refs.iter().enumerate() {
+            doc_boosts.insert(doc_ref.clone(), binary.doc_boost(doc_id as u32)?);
+        }
+
+        let stats = Stats {
+            document_count: binary.document_count(),
+            average_field_lengths: average_field_lengths(&field_lengths, &fields),
+            field_lengths,
+            field_boosts,
+            doc_boosts,
+            k1: binary.k1(),
+            b: binary.b(),
+        };
+
+        let token_set = TokenSet::from_sorted(&inverted_index.keys().cloned().collect::<Vec<_>>());
+
+        Ok(Index {
+            inverted_index,
+            token_set,
+            fields,
+            stats,
+            pipeline: Pipeline::new(language),
+        })
+    }
+
     /// Return the indexed field names.
     pub fn fields(&self) -> &[String] {
         &self.fields

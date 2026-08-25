@@ -1,10 +1,15 @@
 //! Marz core search engine.
 //!
-//! A Rust implementation of a lunr-compatible offline search index with
-//! first-class internationalization support.
+//! A dependency-light offline search index with first-class CJK support,
+//! achieved with n-gram tokenization rather than a segmentation dictionary.
+//!
+//! An index can be serialized as JSON, or as the compact zero-copy [`binary`]
+//! format, which is roughly a fifth of the size and can be read straight from a
+//! memory-mapped file.
 
 #![warn(missing_docs)]
 
+pub mod binary;
 pub mod index;
 pub mod language;
 pub mod languages;
@@ -18,6 +23,7 @@ pub mod token_set;
 pub mod tokenizer;
 
 /// Re-export core types.
+pub use binary::BinaryIndex;
 pub use index::{Index, IndexBuilder, MatchData, SearchResult};
 pub use language::Language;
 pub use query::Query;
