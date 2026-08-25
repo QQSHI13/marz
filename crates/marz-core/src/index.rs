@@ -1103,6 +1103,26 @@ mod tests {
     }
 
     #[test]
+    fn fuzzy_search_finds_a_transposed_typo() {
+        // End to end through the query parser and the pipeline: the swap must
+        // survive stemming and still cost only one edit. Under plain
+        // Levenshtein this query would return nothing.
+        let mut builder = IndexBuilder::new(en());
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("a", 1.0, |_| Some("keyboard".to_string()));
+        let index = builder.build();
+
+        assert!(
+            !index.search("keybaord~1").unwrap().is_empty(),
+            "a transposed pair should be one edit away"
+        );
+        assert!(
+            index.search("keybaord").unwrap().is_empty(),
+            "without ~1 the typo should still not match"
+        );
+    }
+
+    #[test]
     fn wildcard_does_not_inflate_scores_with_duplicates() {
         // `**` expands to every term, and the trie can reach the same term by
         // several paths. Each indexed term must still be counted once.
