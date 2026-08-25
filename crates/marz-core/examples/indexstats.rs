@@ -103,16 +103,13 @@ fn main() {
             let Some(posting) = entry.get(1).and_then(|v| v.as_object()) else {
                 continue;
             };
-            for (field, docs) in posting {
-                if field == "_index" {
-                    continue;
-                }
+            for docs in posting.values() {
                 let Some(docs) = docs.as_object() else {
                     continue;
                 };
-                for (_, meta) in docs {
+                for meta in docs.values() {
                     postings += 1;
-                    if let Some(Value::Array(p)) = meta.get("position") {
+                    if let Some(Value::Array(p)) = meta.get("p") {
                         positions += p.len();
                     }
                 }
@@ -120,14 +117,6 @@ fn main() {
         }
         println!("\npostings        {postings}");
         println!("positions       {positions}");
-    }
-    if let Some(Value::Array(fv)) = parsed.get("fieldVectors") {
-        let floats: usize = fv
-            .iter()
-            .filter_map(|e| e.get(1).and_then(|v| v.as_array()))
-            .map(|a| a.len())
-            .sum();
-        println!("fieldVectors    {} entries, {} floats", fv.len(), floats);
     }
 
     if let Some(out) = args.get(3) {

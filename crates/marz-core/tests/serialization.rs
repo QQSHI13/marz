@@ -28,27 +28,36 @@ fn build_test_index() -> (Index, String) {
 }
 
 #[test]
-fn serialization_includes_positions() {
+fn serialization_includes_positions_and_stats() {
     let (_, json) = build_test_index();
-    assert!(json.contains("\"position\""));
-    assert!(json.contains("\"_index\""));
-    assert!(json.contains("\"fieldVectors\""));
+    // Positions, for highlighting and phrase verification.
+    assert!(json.contains("\"p\""));
+    // Term frequencies and field lengths, which replace the precomputed
+    // field vectors and are what makes query-time BM25 possible.
+    assert!(json.contains("\"tf\""));
+    assert!(json.contains("\"fieldLengths\""));
     assert!(json.contains("\"invertedIndex\""));
+    // Field vectors must be gone, not merely unused.
+    assert!(!json.contains("fieldVectors"));
 }
 
 #[test]
-fn loaded_index_produces_same_results() {
+fn scores_survive_a_roundtrip_exactly() {
+    // Scoring inputs are integers (term frequency, field length, document
+    // count), so a roundtrip should reproduce scores bit-for-bit rather than
+    // approximately.
     let (original, json) = build_test_index();
     let language: Arc<dyn Language> = Arc::new(English);
     let loaded = Index::load(&json, language).unwrap();
 
-    let original_results = original.search("green").unwrap();
-    let loaded_results = loaded.search("green").unwrap();
-
-    assert_eq!(original_results.len(), loaded_results.len());
-    for (orig, load) in original_results.iter().zip(loaded_results.iter()) {
-        assert_eq!(orig.ref_id, load.ref_id);
-        assert!((orig.score - load.score).abs() < 1e-9);
+    for query in ["green", "study", "+green +candlestick", "pl*", "stud~1"] {
+        let a = original.search(query).unwrap();
+        let b = loaded.search(query).unwrap();
+        assert_eq!(a.len(), b.len(), "result count differs for {query:?}");
+        for (orig, load) in a.iter().zip(b.iter()) {
+            assert_eq!(orig.ref_id, load.ref_id, "order differs for {query:?}");
+            assert_eq!(orig.score, load.score, "score differs for {query:?}");
+        }
     }
 }
 

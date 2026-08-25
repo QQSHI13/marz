@@ -80,9 +80,15 @@ impl Query {
         if clause.fields.is_empty() {
             clause.fields = self.all_fields.clone();
         }
-        if clause.boost <= 0.0 {
-            clause.boost = 1.0;
-        }
+        // A negative boost is meaningless — it would subtract from the score
+        // and let a matching document rank below a non-matching one. Clamp it.
+        //
+        // Note that zero is *kept*. lunr writes `clause.boost || 1`, which
+        // silently rewrites an explicit `term^0` into `term^1` — the exact
+        // opposite of what the user asked for. `Clause::default()` already
+        // supplies 1.0 when no boost is given, so there is nothing to default
+        // here and an explicit 0 can be honoured.
+        clause.boost = clause.boost.max(0.0);
 
         // Apply automatic wildcards.
         if (clause.wildcard == Wildcard::Leading || clause.wildcard == Wildcard::Both)

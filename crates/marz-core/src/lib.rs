@@ -15,7 +15,6 @@ pub mod query_parser;
 pub mod token;
 pub mod token_set;
 pub mod tokenizer;
-pub mod vector;
 
 /// Re-export core types.
 pub use index::{Index, IndexBuilder, MatchData, SearchResult};
@@ -33,7 +32,10 @@ pub fn idf(document_count: usize, doc_frequency: usize) -> f64 {
     (1.0 + x.abs()).ln()
 }
 
-/// Compute the lunr BM25 field-vector weight for a single term.
+/// Compute the BM25 weight for one term occurrence in one document field.
+///
+/// This is evaluated at *query* time, once per matching posting, rather than
+/// precomputed into a stored field vector. See [`index`] for why.
 ///
 /// Formula:
 /// w = idf * ((k1 + 1) * tf) / (k1 * (1 - b + b * (field_len / avg_field_len)) + tf)
