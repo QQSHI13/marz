@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=9.1.1"]
 
 [tool.maturin]
 manifest-path = "Cargo.toml"
