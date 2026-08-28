@@ -146,7 +146,7 @@ jobs:
           print('wheel imports and searches')
           "
           python -m pytest -q python/tests/ --rootdir=.
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.runner }}-${{ matrix.target }}
           path: dist
@@ -177,7 +177,7 @@ jobs:
           # import fails with "native extension is not built" — which looks like
           # a broken sdist and is actually a broken test.
           cd /tmp && python -c "import marz; print('sdist builds:', marz.languages())"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: dist
