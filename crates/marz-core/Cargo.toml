@@ -23,7 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 # Criterion supplies its own `main`. Without this the libtest harness is linked
 # in too and consumes the command line first, so `--save-baseline`,
