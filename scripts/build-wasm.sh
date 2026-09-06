@@ -4,11 +4,12 @@
 # Two reasons this is a script rather than a one-line wasm-pack invocation.
 #
 # First, wasm-opt's default baseline is older than the WebAssembly rustc now
-# emits. LLVM lowers large copies to `memory.copy` (bulk memory) and float→int
-# casts to `i32.trunc_sat_f64_u` (non-trapping float-to-int), and wasm-opt
-# rejects the module rather than passing it through. Both features shipped in
-# every major browser by 2020 — below what wasm-bindgen's own output already
-# requires — so enabling them costs no reach.
+# emits. LLVM lowers large copies to `memory.copy` (bulk memory), float→int
+# casts to `i32.trunc_sat_f64_u` (non-trapping float-to-int), and narrow loads
+# to `i32.extend8_s`/`extend16_s` (sign-extension operators), and wasm-opt
+# rejects the module rather than passing it through. All three features shipped
+# in every major browser by ~2021 — below what wasm-bindgen's own output
+# already requires — so enabling them costs no reach.
 #
 # Second, when wasm-pack's own wasm-opt call fails it prints the error, carries
 # on, and ships the *unoptimized* module. The build still "succeeds" and the
@@ -48,7 +49,7 @@ if [ -z "$opt" ]; then
 fi
 
 "$opt" js/pkg/marz_wasm_bg.wasm -o js/pkg/marz_wasm_bg.wasm \
-    -Oz --enable-bulk-memory --enable-nontrapping-float-to-int
+    -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-extension
 
 # wasm-pack writes a `.gitignore` containing `*` into its output directory, on the
 # assumption that the directory is a standalone package it will publish itself.
