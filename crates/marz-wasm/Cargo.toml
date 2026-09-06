@@ -98,7 +98,7 @@ js-sys = "0.3"
 # metadata for a custom `--profile` name, so the `wasm-release` profile the
 # Justfile builds with runs wasm-opt as a separate step; see `just build-wasm`.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-sign-extension"]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-sign-ext"]
 
 [package.metadata.wasm-pack.profile.profiling]
-wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-sign-extension"]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-sign-ext"]

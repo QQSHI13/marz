@@ -49,7 +49,7 @@ if [ -z "$opt" ]; then
 fi
 
 "$opt" js/pkg/marz_wasm_bg.wasm -o js/pkg/marz_wasm_bg.wasm \
-    -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-extension
+    -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext
 
 # wasm-pack writes a `.gitignore` containing `*` into its output directory, on the
 # assumption that the directory is a standalone package it will publish itself.
