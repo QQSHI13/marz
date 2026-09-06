@@ -208,7 +208,11 @@ jobs:
           gz=$(gzip -9 -c js/pkg/marz_wasm_bg.wasm | wc -c)
           echo "wasm (de only): $raw bytes raw, $gz bytes gzipped" \
             >> "$GITHUB_STEP_SUMMARY"
-          limit=200000
+          # 224,029 raw as of Sep 2026 (full build: 550,449): the lever this
+          # guards — one stemmer linked instead of 37 — is working, the floor
+          # moved with the toolchain. Still far below the full build, which is
+          # the property that matters; a disconnected lever would read ~550KB.
+          limit=250000
           if [ "$raw" -gt "$limit" ]; then
             echo "::error::a German-only build is $raw bytes, over $limit." \
                  "The per-language features are not trimming — check that" \
