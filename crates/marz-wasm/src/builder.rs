@@ -260,8 +260,12 @@ impl MarzBuilder {
     /// For the client-side case this is the common path: the index is being
     /// built to be searched now, not stored. Use `build()` when the bytes are
     /// what is wanted, to cache in IndexedDB or hand to a worker.
+    ///
+    /// Unlike `build()`, this takes no `positions` flag: the in-memory index
+    /// always keeps positions (dropping them only shrinks the serialized
+    /// bytes), so there is nothing to opt out of here.
     #[wasm_bindgen(js_name = "buildAndLoad")]
-    pub fn build_and_load(&self, positions: Option<bool>) -> Result<crate::MarzIndex, JsValue> {
+    pub fn build_and_load(&self) -> Result<crate::MarzIndex, JsValue> {
         Ok(crate::MarzIndex::from_parts(
             self.core_builder().build(),
             self.language_code.clone(),
