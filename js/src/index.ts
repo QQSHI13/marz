@@ -180,20 +180,6 @@ export async function tokenize(
  * Match positions are offsets into this string, not into the input. See
  * {@link highlight}. Async only for initialization — see {@link tokenize}.
  */
-export async function tokenize(
-  text: string,
-  language: string,
-): Promise<string[]> {
-  await initialize();
-  return wasmTokenize(text, language);
-}
-
-/**
- * Apply the normalization the indexer applies before tokenizing.
- *
- * Match positions are offsets into this string, not into the input. See
- * {@link highlight}.
- */
 export async function normalize(text: string): Promise<string> {
   await initialize();
   return wasmNormalize(text);
