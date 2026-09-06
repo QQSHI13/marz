@@ -17,14 +17,69 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = []
+default = ["all-languages"]
 # Client-side index building. Adds 39 KB of WebAssembly for tokenization,
 # scoring and serialization, which a search-only bundle never runs. See
 # `src/builder.rs` for when it earns that.
 builder = []
 
+# Which Snowball stemmers get linked. This is the only lever that moves the
+# shipped size: all 37 cost ~193 KB gzipped against ~84 KB for none, and each
+# stemmer is ~2.9 KB of that.
+#
+# Forwarded to marz-core rather than relied on transitively, because
+# `--no-default-features` applies only to the package being built — with
+# `marz-core = { workspace = true }` its own defaults stay enabled through the
+# dependency edge and every stemmer links in regardless of what is asked for
+# here. Hence `default-features = false` below and one forwarding feature per
+# language.
+#
+# A single-language bundle, ~87 KB gzipped:
+#
+#   scripts/build-wasm.sh --no-default-features --features de
+all-languages = ["marz-core/all-languages"]
+
+ar = ["marz-core/ar"]
+ca = ["marz-core/ca"]
+cs = ["marz-core/cs"]
+da = ["marz-core/da"]
+de = ["marz-core/de"]
+el = ["marz-core/el"]
+eo = ["marz-core/eo"]
+es = ["marz-core/es"]
+et = ["marz-core/et"]
+eu = ["marz-core/eu"]
+fa = ["marz-core/fa"]
+fi = ["marz-core/fi"]
+fr = ["marz-core/fr"]
+ga = ["marz-core/ga"]
+hi = ["marz-core/hi"]
+hu = ["marz-core/hu"]
+hy = ["marz-core/hy"]
+id = ["marz-core/id"]
+it = ["marz-core/it"]
+lt = ["marz-core/lt"]
+ne = ["marz-core/ne"]
+nl = ["marz-core/nl"]
+no = ["marz-core/no"]
+pl = ["marz-core/pl"]
+pt = ["marz-core/pt"]
+ro = ["marz-core/ro"]
+ru = ["marz-core/ru"]
+sr = ["marz-core/sr"]
+st = ["marz-core/st"]
+sv = ["marz-core/sv"]
+ta = ["marz-core/ta"]
+tr = ["marz-core/tr"]
+yi = ["marz-core/yi"]
+
+"en-snowball" = ["marz-core/en-snowball"]
+"en-porter" = ["marz-core/en-porter"]
+"en-lovins" = ["marz-core/en-lovins"]
+"nl-porter" = ["marz-core/nl-porter"]
+
 [dependencies]
-marz-core = { workspace = true }
+marz-core = { workspace = true, default-features = false }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 

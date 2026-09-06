@@ -36,30 +36,47 @@
 
 use std::sync::Arc;
 
-use marz_core::languages::{Chinese, English, Japanese, Korean};
+use marz_core::languages::registry;
 use marz_core::{Index, Language};
 use wasm_bindgen::prelude::*;
 
-/// Language codes this build understands.
-const LANGUAGE_CODES: [&str; 4] = ["en", "zh", "ja", "ko"];
-
-/// Resolve a language code to its analysis rules.
+/// `console.warn`, bound directly rather than through `web-sys`.
 ///
-/// A wrong code does not fail at load time — it produces an index whose query
-/// tokenization disagrees with its indexed terms, so searches quietly return
-/// nothing. That is why every entry point that names a language checks it here
-/// instead of falling back to a default.
-fn language_for(code: &str) -> Result<Arc<dyn Language>, JsValue> {
-    match code {
-        "en" => Ok(Arc::new(English)),
-        "zh" => Ok(Arc::new(Chinese)),
-        "ja" => Ok(Arc::new(Japanese)),
-        "ko" => Ok(Arc::new(Korean)),
-        other => Err(error(&format!(
-            "unknown language code {other:?}; expected one of {}",
-            LANGUAGE_CODES.join(", ")
-        ))),
+/// `web-sys` would bring a large dependency and a generated-binding build step
+/// to reach one function that `wasm-bindgen` can declare in four lines. The
+/// import is on `console` rather than the global, so it resolves the same way in
+/// a browser, a worker and Node.
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = warn)]
+    fn console_warn(message: &str);
+}
+
+/// Resolve a language code, warning when it is not one Marz implements.
+///
+/// An unknown code does not throw. Marz implements forty-odd languages and the
+/// world has more: Vietnamese, Hebrew and Ukrainian all tokenize correctly on
+/// whitespace, they simply have no stemmer, so refusing them would block
+/// working languages to catch typos. See `marz_core::languages::registry`.
+///
+/// A typo must not be silent either, so a fallback logs a `console.warn` naming
+/// the code — the browser's console shows `unknown language code "engish"`
+/// rather than a search that quietly returns too little.
+///
+/// The one case that still fails loudly is a *mismatch*: loading bytes built for
+/// one language while asserting another. That is checked in
+/// [`MarzIndex::load`], because a mismatch means the caller shipped the wrong
+/// file, which no amount of tokenization can recover from.
+fn language_for(code: &str) -> Arc<dyn Language> {
+    let resolved = registry::resolve(code);
+    if !resolved.exact {
+        console_warn(&format!(
+            "marz: unknown language code {code:?}: searching with generic \
+             whitespace tokenization and no stemming. \
+             Call languages() for the codes with full support."
+        ));
     }
+    resolved.language
 }
 
 /// Build a JavaScript `Error` to throw.
@@ -85,7 +102,10 @@ fn set(target: &js_sys::Object, key: &str, value: &JsValue) {
 /// Language codes this build supports.
 #[wasm_bindgen(js_name = "languages")]
 pub fn languages() -> Vec<String> {
-    LANGUAGE_CODES.iter().map(|c| (*c).to_string()).collect()
+    registry::codes()
+        .into_iter()
+        .map(|c| c.to_string())
+        .collect()
 }
 
 /// The version of Marz this module was built from.
@@ -114,7 +134,7 @@ pub fn index_language(bytes: &[u8]) -> Result<String, JsValue> {
 /// and would only add noise.
 #[wasm_bindgen(js_name = "tokenize")]
 pub fn tokenize(text: &str, language: &str) -> Result<Vec<String>, JsValue> {
-    let language = language_for(language)?;
+    let language = language_for(language);
     Ok(language
         .tokenize(text)
         .into_iter()
@@ -216,7 +236,7 @@ impl MarzIndex {
             }
         }
 
-        let language = language_for(&stored)?;
+        let language = language_for(&stored);
         let index = Index::from_binary(bytes, language)
             .map_err(|e| error(&format!("could not read index: {e}")))?;
 

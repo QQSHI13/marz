@@ -131,14 +131,41 @@ jobs:
       # 16 KB while looking like a green build. The limit is deliberately loose:
       # it should catch that class of accident, not force a bump for every honest
       # kilobyte. Raise it and update the README together.
+      #
+      # 37 Snowball stemmers are the bulk of this: measured, 85,684 gzipped with
+      # none and 194,556 with all of them, ~2.9 KB apiece.
       - name: Report shipped size
         run: |
           raw=$(stat -c %s js/pkg/marz_wasm_bg.wasm)
           gz=$(gzip -9 -c js/pkg/marz_wasm_bg.wasm | wc -c)
           echo "wasm: $raw bytes raw, $gz bytes gzipped" >> "$GITHUB_STEP_SUMMARY"
-          limit=185000
+          limit=540000
           if [ "$raw" -gt "$limit" ]; then
             echo "::error::wasm is $raw bytes, over the $limit byte limit." \
                  "If wasm-opt failed above, that is the cause." >&2
+            exit 1
+          fi
+
+      # The feature gates are the only lever on size, and they fail *silently*:
+      # `default-features = false` on a dependent is ignored unless the
+      # `[workspace.dependencies]` entry declares it too, so a single-language
+      # build can quietly link all 37 stemmers and still pass every other check.
+      # That is exactly what happened while this was being written. Asserting the
+      # trimmed build is much smaller than the full one is what keeps the lever
+      # connected — a regression here means everyone shipping one language pays
+      # for thirty-seven.
+      - name: Check a single-language build still trims
+        run: |
+          scripts/build-wasm.sh --no-default-features --features de
+          raw=$(stat -c %s js/pkg/marz_wasm_bg.wasm)
+          gz=$(gzip -9 -c js/pkg/marz_wasm_bg.wasm | wc -c)
+          echo "wasm (de only): $raw bytes raw, $gz bytes gzipped" \
+            >> "$GITHUB_STEP_SUMMARY"
+          limit=200000
+          if [ "$raw" -gt "$limit" ]; then
+            echo "::error::a German-only build is $raw bytes, over $limit." \
+                 "The per-language features are not trimming — check that" \
+                 "[workspace.dependencies] marz-core still has" \
+                 "default-features = false." >&2
             exit 1
           fi

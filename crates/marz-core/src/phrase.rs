@@ -81,14 +81,14 @@ impl Phrase {
 /// defaults to `false`), so word-tokenized languages pay nothing for this.
 pub fn extract_phrases(tokens: &[Token], language: &LanguageRef) -> Vec<Phrase> {
     let mut phrases = Vec::new();
-    let mut run: Vec<(String, usize)> = Vec::new();
+    let mut run: Vec<(String, usize, usize)> = Vec::new();
 
-    let flush = |run: &mut Vec<(String, usize)>, phrases: &mut Vec<Phrase>| {
+    let flush = |run: &mut Vec<(String, usize, usize)>, phrases: &mut Vec<Phrase>| {
         if run.len() >= 2 {
             let base = run[0].1;
             phrases.push(Phrase {
-                terms: run.iter().map(|(t, _)| t.clone()).collect(),
-                offsets: run.iter().map(|(_, p)| p - base).collect(),
+                terms: run.iter().map(|(t, _, _)| t.clone()).collect(),
+                offsets: run.iter().map(|(_, p, _)| p - base).collect(),
             });
         }
         run.clear();
@@ -110,15 +110,24 @@ pub fn extract_phrases(tokens: &[Token], language: &LanguageRef) -> Vec<Phrase> 
             continue;
         }
 
-        // Adjacent means the previous n-gram overlaps this one. A gap larger
-        // than the token length means an intervening non-n-gram token or a
-        // script change, and the two runs are separate phrases.
-        if let Some(&(_, prev_start)) = run.last() {
-            if start <= prev_start || start - prev_start >= len.max(1) {
+        // Adjacent means the previous n-gram overlaps this one: this token
+        // starts before the previous one ends.
+        //
+        // The comparison uses the *previous* token's length, not this one's.
+        // With fixed-width CJK bigrams the two are always 2 and it makes no
+        // difference, but the non-spacing scripts (Thai, Khmer, Lao, Burmese,
+        // Tibetan) bigram over grapheme clusters, so a token's char length
+        // varies with how many combining marks it carries. Using this token's
+        // length there splits contiguous runs: in `การค้นหาข้อมูล` the bigram
+        // `นห` follows `ค้น` at a gap of 2 with its own length 2, which reads
+        // as a gap and breaks the phrase in half. What decides overlap is how
+        // far the previous token reached, which is its own length.
+        if let Some(&(_, prev_start, prev_len)) = run.last() {
+            if start <= prev_start || start - prev_start >= prev_len.max(1) {
                 flush(&mut run, &mut phrases);
             }
         }
-        run.push((token.term.clone(), start));
+        run.push((token.term.clone(), start, len));
     }
     flush(&mut run, &mut phrases);
 

@@ -18,6 +18,73 @@ readme = "README.md"
 # included it would also need the fixtures to be present and correct.
 include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
+# One feature per Snowball-stemmed language, because trimming which stemmers
+# ship is the only lever that moves the WebAssembly size. Measured through
+# `scripts/build-wasm.sh`: the vendored runtime is ~0.2 KB and each stemmer is
+# ~2.9 KB gzipped, so the cost is linear in language count and nothing else
+# about the build changes it.
+#
+# All 37 are on by default. A search engine that silently lacks German is worse
+# than one that is 100 KB larger, and native callers — every Python user — have
+# no size constraint at all. Anyone building their own browser bundle for a
+# single-language site can get back to ~87 KB gzipped:
+#
+#   wasm-pack build crates/marz-wasm --no-default-features --features marz-core/de
+#
+# Turning a language off removes its stemmer, not the language: the code still
+# resolves and still tokenizes, it just stops stemming. `en`, `zh`, `ja`, `ko`
+# and the five non-spacing scripts are hand-written rather than generated, so
+# they are always present and have no feature to disable.
+[features]
+default = ["all-languages"]
+
+all-languages = [
+    "ar", "ca", "cs", "da", "de", "el", "eo", "es", "et", "eu", "fa", "fi",
+    "fr", "ga", "hi", "hu", "hy", "id", "it", "lt", "ne", "nl", "no", "pl",
+    "pt", "ro", "ru", "sr", "st", "sv", "ta", "tr", "yi",
+    "en-snowball", "en-porter", "en-lovins", "nl-porter",
+]
+
+ar = []
+ca = []
+cs = []
+da = []
+de = []
+el = []
+eo = []
+es = []
+et = []
+eu = []
+fa = []
+fi = []
+fr = []
+ga = []
+hi = []
+hu = []
+hy = []
+id = []
+it = []
+lt = []
+ne = []
+nl = []
+no = []
+pl = []
+pt = []
+ro = []
+ru = []
+sr = []
+st = []
+sv = []
+ta = []
+tr = []
+yi = []
+
+# Variant algorithms rather than languages. See `SNOWBALL_LANGUAGES`.
+"en-snowball" = []
+"en-porter" = []
+"en-lovins" = []
+"nl-porter" = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

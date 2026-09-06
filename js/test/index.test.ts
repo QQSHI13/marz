@@ -62,7 +62,13 @@ after(() => {
 
 describe("module", () => {
   test("reports the languages it was built with", async () => {
-    assert.deepEqual(await languages(), ["en", "zh", "ja", "ko"]);
+    const codes = await languages();
+    // Hand-written, Snowball-stemmed, and non-spacing respectively.
+    for (const code of ["en", "zh", "ja", "ko", "de", "ru", "tr", "th", "km", "bo"]) {
+      assert.ok(codes.includes(code), `${code} missing from languages()`);
+    }
+    assert.ok(codes.length > 40, `only ${codes.length} codes`);
+    assert.deepEqual(codes, [...codes].sort(), "languages() should be sorted");
   });
 
   test("reports a version", async () => {
@@ -317,8 +323,43 @@ describe("tokenize", () => {
     ]);
   });
 
-  test("rejects an unknown language rather than guessing", async () => {
-    await assert.rejects(() => tokenize("hello", "xx"), /unknown language/);
+  test("segments Thai, which has no spaces to split on", async () => {
+    // Previously the whole phrase came back as one token, so no shorter query
+    // could ever match it. Bigrams are over grapheme clusters, so no term
+    // begins with a combining mark.
+    const tokens = await tokenize("การค้นหา", "th");
+    assert.ok(tokens.length > 2, `got ${JSON.stringify(tokens)}`);
+    assert.ok(tokens.includes("ค้น"), `got ${JSON.stringify(tokens)}`);
+  });
+
+  test("splits a Snowball language on words, without stemming", async () => {
+    // Pre-pipeline, like the English case above: the split, not the stems. That
+    // German stemming actually reaches the index is a Rust-side test — this only
+    // pins that a Snowball code resolves here instead of throwing.
+    assert.deepEqual(await tokenize("Die Suchmaschinen", "de"), [
+      "die",
+      "suchmaschinen",
+    ]);
+  });
+
+  test("warns on an unknown language and falls back to generic", async () => {
+    // Not a rejection: Marz supports 40-odd codes and the world has more, so an
+    // unstemmed language still gets a working whitespace-tokenized index. The
+    // warning is what keeps a typo from degrading a search silently.
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.join(" "));
+    };
+    try {
+      assert.deepEqual(await tokenize("hello world", "xx"), ["hello", "world"]);
+    } finally {
+      console.warn = original;
+    }
+    assert.ok(
+      warnings.some((w) => w.includes('unknown language code "xx"')),
+      `expected a warning naming the code, got ${JSON.stringify(warnings)}`,
+    );
   });
 });
 

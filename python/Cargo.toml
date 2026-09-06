@@ -19,7 +19,11 @@ name = "marz"
 crate-type = ["cdylib"]
 
 [dependencies]
-marz-core = { workspace = true }
+# All 37 stemmers, always. The workspace entry turns marz-core's defaults off so
+# the browser bundle can trim them; nothing is gained by trimming here, where the
+# extension module is already megabytes and a missing language is a silent
+# recall failure rather than a saved download.
+marz-core = { workspace = true, features = ["all-languages"] }
 # `abi3-py310` builds against CPython's stable ABI, so one wheel per platform
 # covers 3.10 and every release after it — including versions that do not exist
 # yet. Without it the release matrix is one wheel per interpreter per platform,

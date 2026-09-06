@@ -11,7 +11,15 @@ repository = "https://github.com/QQSHI13/marz"
 rust-version = "1.78"
 
 [workspace.dependencies]
-marz-core = { path = "crates/marz-core" }
+# `default-features = false` must be declared *here*, not only on the dependent:
+# cargo ignores a member's `default-features = false` when the workspace entry
+# omits it (with a warning that says it may become a hard error), so without
+# this line `marz-core`'s `all-languages` default stays on through the dependency
+# edge and every stemmer links into the browser bundle no matter what
+# `--no-default-features` is passed to the build. Each member opts back in to the
+# language set it wants: `marz-wasm` forwards per-language features, `python`
+# takes all 37 because native callers have no size constraint.
+marz-core = { path = "crates/marz-core", default-features = false }
 
 [profile.release]
 # Cross-crate inlining. Measured on a 2.9 MB Japanese corpus this is within

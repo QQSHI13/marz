@@ -40,8 +40,13 @@ def build(docs=DOCS, language="en", **kwargs):
 
 
 class TestModule:
-    def test_languages_are_the_four_we_support(self):
-        assert marz.languages() == ["en", "zh", "ja", "ko"]
+    def test_languages_covers_every_family(self):
+        codes = marz.languages()
+        # Hand-written, Snowball-stemmed, and non-spacing respectively.
+        for code in ["en", "zh", "ja", "ko", "de", "ru", "tr", "th", "km", "bo"]:
+            assert code in codes, f"{code} missing from languages()"
+        assert len(codes) > 40, f"only {len(codes)} codes"
+        assert codes == sorted(codes), "languages() should be sorted"
 
     def test_version_is_exposed(self):
         assert marz.__version__.count(".") == 2
@@ -54,15 +59,49 @@ class TestModule:
         # 検索 is a run of 2 so it yields one bigram; エンジン yields three.
         assert marz.tokenize("検索エンジン", "ja") == ["検索", "エン", "ンジ", "ジン"]
 
-    def test_unknown_language_names_the_valid_codes(self):
-        with pytest.raises(ValueError, match="expected one of en, zh, ja, ko"):
-            marz.tokenize("x", "klingon")
+    def test_tokenize_segments_thai_without_a_dictionary(self):
+        # Thai has no spaces, so this used to come back as a single token and
+        # nothing shorter than the whole phrase could match it.
+        tokens = marz.tokenize("การค้นหา", "th")
+        assert len(tokens) > 2
+        # Bigrams are over grapheme clusters, so a term never begins with a
+        # combining mark.
+        assert "ค้น" in tokens, tokens
+
+    def test_a_snowball_language_stems(self):
+        # German plural to singular: the reason stemming exists. Checked through
+        # a built index rather than `tokenize`, which is pre-pipeline by design
+        # and so reports the split, not the stemmed terms.
+        index = build(
+            [{"id": "de1", "title": "Suchmaschinen", "body": "wie sie arbeiten"}],
+            language="de",
+        )
+        # The query is the singular; the document only ever says the plural.
+        assert [hit.ref for hit in index.search("Suchmaschine")] == ["de1"]
+
+    def test_unknown_language_warns_and_falls_back(self):
+        # Not an error: Marz supports 40-odd codes and the world has more, so a
+        # code with no stemmer still gets a working whitespace-tokenized index.
+        # But it must not be silent, or a typo degrades an index unnoticed.
+        with pytest.warns(UserWarning, match='unknown language code "klingon"'):
+            assert marz.tokenize("qapla batlh", "klingon") == ["qapla", "batlh"]
+
+    def test_an_unstemmed_real_language_works(self):
+        # Vietnamese is what the fallback is *for*, not a typo.
+        with pytest.warns(UserWarning):
+            assert marz.tokenize("công cụ tìm kiếm", "vi") == [
+                "công",
+                "cụ",
+                "tìm",
+                "kiếm",
+            ]
 
 
 class TestBuilder:
-    def test_unknown_language_is_rejected_at_construction(self):
-        # Not deferred: a wrong code silently indexes by the wrong rules.
-        with pytest.raises(ValueError, match="unknown language code"):
+    def test_unknown_language_warns_at_construction(self):
+        # Warned once, where the mistake was made, rather than at every later
+        # call that happens to touch the language.
+        with pytest.warns(UserWarning, match='unknown language code "xx"'):
             marz.IndexBuilder("xx")
 
     def test_documents_need_a_field_to_be_indexed_into(self):

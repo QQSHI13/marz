@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use marz_core::languages::{Chinese, English, Japanese, Korean};
+use marz_core::languages::registry;
 use marz_core::{IndexBuilder, Language};
 use serde_json::Value;
 
@@ -13,12 +13,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let docs: Vec<HashMap<String, Value>> =
         serde_json::from_str(&std::fs::read_to_string(&args[1]).unwrap()).unwrap();
-    let lang: Arc<dyn Language> = match args[2].as_str() {
-        "zh" => Arc::new(Chinese),
-        "ja" => Arc::new(Japanese),
-        "ko" => Arc::new(Korean),
-        _ => Arc::new(English),
-    };
+    let lang: Arc<dyn Language> = registry::resolve(&args[2]).language;
 
     let mut b = IndexBuilder::new(lang.clone());
     b.ref_field("location")

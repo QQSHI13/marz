@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use marz_core::languages::{Chinese, English, Japanese, Korean};
+use marz_core::languages::registry;
 use marz_core::query_parser::QueryParseError;
 use marz_core::{Index as CoreIndex, IndexBuilder as CoreBuilder, Language};
 use pyo3::create_exception;
@@ -41,31 +41,40 @@ create_exception!(
     "Raised when bytes are not a valid Marz binary index."
 );
 
-/// Language codes this build understands, in the order `languages()` reports.
-const LANGUAGE_CODES: [&str; 4] = ["en", "zh", "ja", "ko"];
-
-/// Resolve a language code, or explain what the valid ones are.
+/// Resolve a language code, warning when it is not one Marz implements.
 ///
-/// The code is checked here rather than deferred, because a typo'd code does not
-/// fail — it silently builds an index tokenized by the wrong rules, which then
-/// returns no results for queries that look correct.
-fn language_for(code: &str) -> PyResult<Arc<dyn Language>> {
-    match code {
-        "en" => Ok(Arc::new(English)),
-        "zh" => Ok(Arc::new(Chinese)),
-        "ja" => Ok(Arc::new(Japanese)),
-        "ko" => Ok(Arc::new(Korean)),
-        other => Err(PyValueError::new_err(format!(
-            "unknown language code {other:?}; expected one of {}",
-            LANGUAGE_CODES.join(", ")
-        ))),
+/// An unknown code does not raise. Marz implements forty-odd languages and the
+/// world has more: Vietnamese, Hebrew and Ukrainian all tokenize correctly on
+/// whitespace, they simply have no stemmer, so refusing them would block
+/// working languages to catch typos. See `marz_core::languages::registry`.
+///
+/// A typo must not be silent either, so a fallback emits a `UserWarning` naming
+/// the code. A build script's output shows `unknown language code 'engish'`
+/// rather than quietly producing an index with no stemming.
+fn language_for(py: Python<'_>, code: &str) -> PyResult<Arc<dyn Language>> {
+    let resolved = registry::resolve(code);
+    if !resolved.exact {
+        PyErr::warn(
+            py,
+            &py.get_type::<pyo3::exceptions::PyUserWarning>(),
+            &std::ffi::CString::new(format!(
+                "unknown language code {code:?}: indexing with generic \
+                 whitespace tokenization and no stemming. \
+                 Call marz.languages() for the codes with full support."
+            ))?,
+            1,
+        )?;
     }
+    Ok(resolved.language)
 }
 
 /// Language codes this build supports.
 #[pyfunction]
 fn languages() -> Vec<String> {
-    LANGUAGE_CODES.iter().map(|c| (*c).to_string()).collect()
+    registry::codes()
+        .into_iter()
+        .map(|c| c.to_string())
+        .collect()
 }
 
 /// Pull a field's text out of a document mapping.
@@ -154,10 +163,10 @@ impl IndexBuilder {
     /// `k1` and `b` are the BM25 tuning parameters; the defaults match lunr.
     #[new]
     #[pyo3(signature = (language, *, ref_field = "id", k1 = 1.2, b = 0.75))]
-    fn new(language: &str, ref_field: &str, k1: f64, b: f64) -> PyResult<Self> {
+    fn new(py: Python<'_>, language: &str, ref_field: &str, k1: f64, b: f64) -> PyResult<Self> {
         Ok(Self {
             language_code: language.to_string(),
-            language: language_for(language)?,
+            language: language_for(py, language)?,
             ref_field: ref_field.to_string(),
             fields: Vec::new(),
             docs: Vec::new(),
@@ -447,7 +456,7 @@ impl Index {
                 )));
             }
         }
-        let lang = language_for(&stored)?;
+        let lang = language_for(py, &stored)?;
 
         // `data` borrows a Python buffer, which cannot cross a GIL release, so
         // copy it first. The copy is a fraction of what the load allocates —
@@ -467,7 +476,7 @@ impl Index {
     /// Read an index from `to_json()` output.
     #[staticmethod]
     fn from_json(py: Python<'_>, data: &str, language: &str) -> PyResult<Self> {
-        let lang = language_for(language)?;
+        let lang = language_for(py, language)?;
         let data = data.to_string();
         let code = language.to_string();
         let index = py
@@ -522,8 +531,8 @@ impl Index {
 /// Useful for understanding CJK results: `tokenize("検索エンジン", "ja")` shows
 /// the overlapping bigrams that are actually indexed.
 #[pyfunction]
-fn tokenize(text: &str, language: &str) -> PyResult<Vec<String>> {
-    let lang = language_for(language)?;
+fn tokenize(py: Python<'_>, text: &str, language: &str) -> PyResult<Vec<String>> {
+    let lang = language_for(py, language)?;
     Ok(lang
         .tokenize(text)
         .into_iter()

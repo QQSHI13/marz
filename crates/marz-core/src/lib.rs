@@ -18,6 +18,7 @@ pub mod phrase;
 pub mod pipeline;
 pub mod query;
 pub mod query_parser;
+pub mod stemmers;
 pub mod token;
 pub mod token_set;
 pub mod tokenizer;
