@@ -29,6 +29,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+#[cfg(feature = "json")]
 use serde::{Deserialize, Serialize};
 
 use crate::language::LanguageRef;
@@ -45,6 +46,10 @@ use crate::{bm25_weight, idf};
 /// Marz indexes are not interchangeable with lunr indexes: the CJK
 /// tokenization differs, and the scoring data is stored as term frequencies
 /// rather than precomputed field vectors.
+///
+/// Only compiled with the `json` cargo feature, which is the sole reader of
+/// the version string.
+#[cfg(feature = "json")]
 const INDEX_VERSION: &str = "3";
 
 /// A reference to one field of one document.
@@ -785,6 +790,10 @@ impl Index {
     ///
     /// Deterministic: inner maps are sorted by field name and doc ref so two
     /// builds of the same corpus produce byte-identical JSON.
+    ///
+    /// Only available with the `json` cargo feature (on by default). The
+    /// browser bundle disables it: searching reads the binary format.
+    #[cfg(feature = "json")]
     pub fn to_json(&self) -> String {
         let inverted_index: Vec<(String, SerializedPosting)> = self
             .inverted_index
@@ -865,6 +874,9 @@ impl Index {
     /// The `language` must match the tokenizer/pipeline used to build the index.
     /// A version mismatch or a language mismatch is rejected rather than
     /// silently producing wrong rankings.
+    ///
+    /// Only available with the `json` cargo feature (on by default).
+    #[cfg(feature = "json")]
     pub fn load(json: &str, language: LanguageRef) -> Result<Self, serde_json::Error> {
         let serialized: SerializedIndex = serde_json::from_str(json)?;
 
@@ -957,7 +969,7 @@ impl Index {
 
     /// Serialize the index to the compact binary format.
     ///
-    /// Roughly a fifth the size of [`Index::to_json`] output. Pass
+    /// Roughly a fifth the size of `Index::to_json` output. Pass
     /// `include_positions = false` to drop highlighting and CJK phrase
     /// verification data for a further saving of about a tenth.
     pub fn to_binary(&self, include_positions: bool) -> Vec<u8> {
@@ -979,7 +991,7 @@ impl Index {
     /// Load an index from the binary format.
     ///
     /// This materializes the postings into the same in-memory structures
-    /// [`Index::load`] builds, so search behaves identically. It is the
+    /// `Index::load` builds, so search behaves identically. It is the
     /// convenient path, not the zero-copy one — use [`crate::BinaryIndex`]
     /// directly to read postings straight out of a mapped buffer.
     ///
@@ -1142,6 +1154,9 @@ fn average_field_lengths(
 }
 
 /// Serialized index format.
+///
+/// Only compiled with the `json` cargo feature.
+#[cfg(feature = "json")]
 #[derive(Serialize, Deserialize)]
 struct SerializedIndex {
     version: String,
@@ -1164,6 +1179,7 @@ struct SerializedIndex {
 }
 
 /// Serialized posting for a single term.
+#[cfg(feature = "json")]
 #[derive(Serialize, Deserialize)]
 struct SerializedPosting {
     #[serde(flatten)]
@@ -1174,6 +1190,7 @@ struct SerializedPosting {
 ///
 /// Both fields default, so a posting written without positions (a positions-free
 /// index) or without an explicit term frequency still deserializes.
+#[cfg(feature = "json")]
 #[derive(Serialize, Deserialize)]
 struct SerializedPostingDoc {
     #[serde(rename = "tf", default)]

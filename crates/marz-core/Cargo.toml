@@ -36,7 +36,13 @@ include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 # and the five non-spacing scripts are hand-written rather than generated, so
 # they are always present and have no feature to disable.
 [features]
-default = ["all-languages"]
+default = ["all-languages", "json"]
+
+# JSON index serialization. The binary format needs no dependencies at all;
+# gating this keeps serde_json out of the WebAssembly search bundle, which
+# only ever reads the binary format (marz-wasm depends with
+# default-features = false and never enables this).
+json = ["dep:serde", "dep:serde_json"]
 
 all-languages = [
     "ar", "ca", "cs", "da", "de", "el", "eo", "es", "et", "eu", "fa", "fi",
@@ -86,8 +92,8 @@ yi = []
 "nl-porter" = []
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 criterion = "0.8"
