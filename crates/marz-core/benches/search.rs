@@ -19,9 +19,10 @@
 //! Run one group with `cargo bench -- search`, and compare against a previous
 //! commit with `--save-baseline`/`--baseline`.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use marz_core::languages::{English, Japanese};
 use marz_core::{Index, IndexBuilder, Language};
+use std::hint::black_box;
 use std::sync::Arc;
 
 /// Vocabulary for the synthetic English corpus.
