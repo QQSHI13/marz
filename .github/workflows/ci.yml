@@ -25,7 +25,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.78
-      - run: cargo check -p marz-core --locked
+      # No Cargo.lock is committed (library crate, see .gitignore), so no
+      # --locked: there is nothing to lock against. This only proves the code
+      # parses/checks on the declared MSRV, not reproducibility.
+      - run: cargo check -p marz-core
 
   # The committed fixture must be what the generator produces. Without this the
   # two can drift: someone edits an expectation by hand to make a test pass, and
@@ -97,6 +100,12 @@ jobs:
           if ! command -v wasm-pack &> /dev/null; then
             cargo install wasm-pack --locked
           fi
+      - name: Install wasm-opt (binaryen)
+        run: |
+          if ! command -v wasm-opt &> /dev/null; then
+            sudo apt-get update -q && sudo apt-get install -y -q binaryen
+          fi
+          wasm-opt --version
       - run: scripts/build-wasm.sh
 
       # The optional client-side builder is compiled only under its feature, so
