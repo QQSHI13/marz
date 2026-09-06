@@ -3,7 +3,11 @@ requires = ["maturin>=1.15.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "marz"
+# Distribution name is `marz-search`: plain `marz` is taken on PyPI by an
+# unrelated 2022 project. The import package stays `marz`
+# (`module-name = "marz._marz"` below), so `pip install marz-search` then
+# `import marz`.
+name = "marz-search"
 version = "0.1.0"
 description = "Offline search engine with first-class CJK support and no segmentation dictionary."
 # Symlinks to the repository root. Packaging metadata cannot reference paths

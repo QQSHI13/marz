@@ -3,7 +3,7 @@
 Three registries, one tag. Nothing is published by hand, and there are no
 publish tokens stored in this repository.
 
-- **PyPI** — `marz` (wheels + sdist)
+- **PyPI** — `marz-search` (wheels + sdist; the import package is still `marz`)
 - **npm** — `marz-search` (TypeScript wrapper + the compiled `.wasm`)
 - **crates.io** — `marz-core` (the engine as a Rust library)
 
@@ -58,7 +58,7 @@ PyPI → Your account → Publishing → Add a new pending publisher (GitHub):
 
 | Field | Value |
 |---|---|
-| PyPI Project Name | `marz` |
+| PyPI Project Name | `marz-search` |
 | Owner | `QQSHI13` |
 | Repository name | `marz` |
 | Workflow name | `release.yml` |

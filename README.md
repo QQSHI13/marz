@@ -151,7 +151,7 @@ a Marz index sits beside lunr.js. See `crates/marz-core/tests/golden.rs`.
 Nothing is published yet — the first release has not been cut. When it is:
 
 ```
-pip install marz          # build indexes (and search them, natively)
+pip install marz-search   # build indexes (and search them, natively)
 npm install marz-search   # search them in the browser
 ```
 
