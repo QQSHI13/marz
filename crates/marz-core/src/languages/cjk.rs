@@ -43,7 +43,7 @@
 
 use crate::normalize::normalize;
 use crate::token::Token;
-use crate::tokenizer::tokenize_with_separator;
+use crate::tokenizer::tokenize_normalized;
 
 /// Returns true for CJK Unified Ideographs (Han).
 pub fn is_cjk_ideograph(c: char) -> bool {
@@ -246,14 +246,15 @@ pub fn tokenize_cjk(text: &str, bigram_scripts: &[Script]) -> Vec<Token> {
         let script = script_of(chars[i]);
 
         if script == Script::Other {
-            // Latin, digits, punctuation: delegate to the separator tokenizer,
-            // then re-base its positions onto the full string.
+            // Latin, digits, punctuation: the `run` is already normalized (the
+            // whole input was normalized up front), so split without a second
+            // normalize pass.
             let run_start = i;
             while i < chars.len() && script_of(chars[i]) == Script::Other {
                 i += 1;
             }
             let run: String = chars[run_start..i].iter().collect();
-            for t in tokenize_with_separator(&run, CJK_SEPARATORS) {
+            for t in tokenize_normalized(&run, CJK_SEPARATORS) {
                 let (start, len) = t.position().unwrap_or((0, t.term.chars().count()));
                 let index = tokens.len();
                 tokens.push(Token::with_position(t.term, run_start + start, len, index));
@@ -350,14 +351,12 @@ fn cluster_bounds(run: &[char], script: Script) -> Vec<usize> {
 /// position covering the untrimmed span, and every highlight would include the
 /// punctuation the trimmer had just removed.
 pub fn cjk_trim(token: &mut Token) -> bool {
-    if token.term.chars().next().is_some_and(is_cjk_char) {
+    if token.term.chars().next().is_some_and(is_ngram_char) {
         return !token.term.is_empty();
     }
-    token.trim_matching(is_word_char)
-}
-
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    // Non-ngram runs (Latin, digits): keep alphanumerics plus combining marks
+    // so a trailing vowel/tone sign is not stripped off its base.
+    token.trim_matching(|c| c.is_alphanumeric() || c == '_' || is_combining_mark(c))
 }
 
 #[cfg(test)]

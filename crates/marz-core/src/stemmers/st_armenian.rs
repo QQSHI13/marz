@@ -5,8 +5,8 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
 struct Context {
@@ -245,7 +245,7 @@ fn r_mark_regions(env: &mut SnowballEnv, context: &mut Context) -> bool {
         break 'lab0;
     }
     env.cursor = v_1;
-    return true
+    return true;
 }
 
 fn r_adjective(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -255,7 +255,7 @@ fn r_adjective(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.bra = env.cursor;
     env.slice_del();
-    return true
+    return true;
 }
 
 fn r_verb(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -265,7 +265,7 @@ fn r_verb(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.bra = env.cursor;
     env.slice_del();
-    return true
+    return true;
 }
 
 fn r_noun(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -275,7 +275,7 @@ fn r_noun(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.bra = env.cursor;
     env.slice_del();
-    return true
+    return true;
 }
 
 fn r_ending(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -288,14 +288,11 @@ fn r_ending(env: &mut SnowballEnv, context: &mut Context) -> bool {
         return false;
     }
     env.slice_del();
-    return true
+    return true;
 }
 
 pub fn stem(env: &mut SnowballEnv) -> bool {
-    let mut context = &mut Context {
-        i_p2: 0,
-        i_pV: 0,
-    };
+    let mut context = &mut Context { i_p2: 0, i_pV: 0 };
     r_mark_regions(env, context);
     env.limit_backward = env.cursor;
     env.cursor = env.limit;
@@ -318,5 +315,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
     env.cursor = env.limit - v_5;
     env.limit_backward = v_1;
     env.cursor = env.limit_backward;
-    return true
+    return true;
 }

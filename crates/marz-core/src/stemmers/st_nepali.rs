@@ -5,12 +5,11 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
-struct Context {
-}
+struct Context {}
 
 static A_0: &'static [Among<Context>; 17] = &[
     Among("\u{0915}\u{0940}", -1, 2, None),
@@ -23,11 +22,21 @@ static A_0: &'static [Among<Context>; 17] = &[
     Among("\u{0915}\u{094B}", -1, 2, None),
     Among("\u{0938}\u{0901}\u{0917}", -1, 1, None),
     Among("\u{0938}\u{0902}\u{0917}", -1, 1, None),
-    Among("\u{092E}\u{093E}\u{0930}\u{094D}\u{092B}\u{0924}", -1, 1, None),
+    Among(
+        "\u{092E}\u{093E}\u{0930}\u{094D}\u{092B}\u{0924}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0930}\u{0924}", -1, 1, None),
     Among("\u{0915}\u{093E}", -1, 2, None),
     Among("\u{092E}\u{093E}", -1, 1, None),
-    Among("\u{0926}\u{094D}\u{0935}\u{093E}\u{0930}\u{093E}", -1, 1, None),
+    Among(
+        "\u{0926}\u{094D}\u{0935}\u{093E}\u{0930}\u{093E}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0915}\u{093F}", -1, 2, None),
     Among("\u{092A}\u{091B}\u{093F}", -1, 1, None),
 ];
@@ -144,33 +153,35 @@ fn r_remove_category_1(env: &mut SnowballEnv, context: &mut Context) -> bool {
         1 => {
             env.slice_del();
         }
-        2 => {
-            'lab0: loop {
-                'lab1: loop {
-                    if !env.eq_s_b(&"\u{090F}") {
-                        break 'lab1;
-                    }
-                    break 'lab0;
+        2 => 'lab0: loop {
+            'lab1: loop {
+                if !env.eq_s_b(&"\u{090F}") {
+                    break 'lab1;
                 }
-                'lab2: loop {
-                    if !env.eq_s_b(&"\u{0947}") {
-                        break 'lab2;
-                    }
-                    break 'lab0;
-                }
-                env.slice_del();
                 break 'lab0;
             }
-        }
-        _ => ()
+            'lab2: loop {
+                if !env.eq_s_b(&"\u{0947}") {
+                    break 'lab2;
+                }
+                break 'lab0;
+            }
+            env.slice_del();
+            break 'lab0;
+        },
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_remove_category_2(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
     env.ket = env.cursor;
-    if (env.cursor - 2 <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 4 as u8 || ((262 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f)) & 1) == 0) {
+    if (env.cursor - 2 <= env.limit_backward
+        || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 4 as u8
+        || ((262 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f)) & 1)
+            == 0)
+    {
         return false;
     }
 
@@ -213,9 +224,9 @@ fn r_remove_category_2(env: &mut SnowballEnv, context: &mut Context) -> bool {
             }
             env.slice_del();
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_remove_category_3(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -225,18 +236,17 @@ fn r_remove_category_3(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.bra = env.cursor;
     env.slice_del();
-    return true
+    return true;
 }
 
 pub fn stem(env: &mut SnowballEnv) -> bool {
-    let mut context = &mut Context {
-    };
+    let mut context = &mut Context {};
     env.limit_backward = env.cursor;
     env.cursor = env.limit;
     let v_1 = env.limit - env.cursor;
     r_remove_category_1(env, context);
     env.cursor = env.limit - v_1;
-    'replab0: loop{
+    'replab0: loop {
         let v_2 = env.limit - env.cursor;
         'lab1: for _ in 0..1 {
             let v_3 = env.limit - env.cursor;
@@ -251,5 +261,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
         break 'replab0;
     }
     env.cursor = env.limit_backward;
-    return true
+    return true;
 }

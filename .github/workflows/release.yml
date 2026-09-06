@@ -17,7 +17,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
   # Lets a release be rehearsed end to end. Every job below stops short of
   # uploading unless `publish` is true, so a manual run builds each artifact,
   # runs the gate against it, and uploads nothing.
@@ -46,10 +46,15 @@ jobs:
         run: |
           cargo_version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           npm_version=$(node -p "require('./js/package.json').version")
+          py_version=$(grep -m1 '^version' python/pyproject.toml | cut -d'"' -f2)
           echo "version=$cargo_version" >> "$GITHUB_OUTPUT"
 
           if [ "$cargo_version" != "$npm_version" ]; then
             echo "::error::Cargo.toml says $cargo_version, js/package.json says $npm_version" >&2
+            exit 1
+          fi
+          if [ "$cargo_version" != "$py_version" ]; then
+            echo "::error::Cargo.toml says $cargo_version, python/pyproject.toml says $py_version (PyPI versions are immutable; drift burns a number)" >&2
             exit 1
           fi
           if [ "${{ github.ref_type }}" = "tag" ]; then
@@ -76,6 +81,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
+      - uses: astral-sh/setup-uv@v7
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -85,6 +91,14 @@ jobs:
       - name: Test the JS bindings
         working-directory: js
         run: node --test 'test/*.test.ts'
+      - name: Test the Python bindings (gate must cover wheels' regressions)
+        working-directory: python
+        run: |
+          uv tool install maturin
+          uv venv
+          uv pip install pytest
+          uv run maturin develop --uv
+          uv run pytest -q
 
   # One wheel per platform rather than per interpreter, because the extension is
   # built against CPython's stable ABI — see the abi3 comment in python/Cargo.toml.

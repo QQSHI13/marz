@@ -207,7 +207,10 @@ mod tests {
         // Text is still indexable — just unstemmed.
         assert_eq!(r.language.stem("suchmaschinen"), "suchmaschinen");
         assert_eq!(r.language.tokenize("die suchmaschine").len(), 2);
-        assert!(!codes().contains(&"de"), "a disabled code is still advertised");
+        assert!(
+            !codes().contains(&"de"),
+            "a disabled code is still advertised"
+        );
     }
 
     /// `en` must reach the hand-written Porter, not Snowball's Porter2. The two

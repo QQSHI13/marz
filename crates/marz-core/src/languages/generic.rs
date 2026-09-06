@@ -23,7 +23,7 @@
 
 use crate::language::Language;
 use crate::token::Token;
-use crate::tokenizer::tokenize_with_separator;
+use crate::tokenizer::{is_word_char, tokenize_with_separator};
 
 /// Separators for a language written with spaces.
 ///
@@ -53,7 +53,7 @@ impl Language for Generic {
     }
 
     fn trim(&self, token: &mut Token) -> bool {
-        token.trim_matching(|c| c.is_alphanumeric() || c == '_')
+        token.trim_matching(is_word_char)
     }
 
     fn is_stop_word(&self, _term: &str) -> bool {
@@ -124,7 +124,8 @@ mod tests {
     #[test]
     fn punctuation_is_trimmed() {
         let g = Generic::new("vi");
-        for (input, expected) in [("(tìm)", "tìm"), ("kiếm.", "kiếm"), ("«מנוע»", "מנוע")] {
+        for (input, expected) in [("(tìm)", "tìm"), ("kiếm.", "kiếm"), ("«מנוע»", "מנוע")]
+        {
             let mut token = Token::new(input);
             assert!(g.trim(&mut token), "{input} was dropped");
             assert_eq!(token.term, expected);

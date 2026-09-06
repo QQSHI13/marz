@@ -399,7 +399,7 @@ class TestSerialization:
         assert issubclass(marz.FormatError, ValueError)
 
     def test_malformed_json_raises_value_error(self):
-        with pytest.raises(ValueError, match="could not load JSON index"):
+        with pytest.raises(ValueError, match="not a Marz index"):
             marz.Index.from_json("{}", "en")
 
 

@@ -6,7 +6,7 @@ default:
 
 # Check Rust workspace
 check:
-    cargo check --workspace
+    cargo check --workspace --all-targets
 
 # Run Rust tests
 test:

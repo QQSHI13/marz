@@ -13,12 +13,19 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace
+      - run: cargo check --workspace --all-targets
       - run: cargo test --workspace
       # --all-targets so examples and tests are linted too: the fixture
       # generator is an example, and would otherwise never be checked.
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.78
+      - run: cargo check -p marz-core --locked
 
   # The committed fixture must be what the generator produces. Without this the
   # two can drift: someone edits an expectation by hand to make a test pass, and
@@ -37,6 +44,21 @@ jobs:
           node generate_golden.js
       - name: Fail if the fixture is not what lunr.js produces
         run: git diff --exit-code -- tests/fixtures/
+
+  js-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Regenerate JS fixtures
+        run: |
+          cargo run --example mkfixture -p marz-core -- \
+            js/fixtures/corpus_en.json js/fixtures/en.marz en
+          cargo run --example mkfixture -p marz-core -- \
+            js/fixtures/corpus_ja.json js/fixtures/ja.marz ja
+      - name: Fail if JS fixtures drifted
+        run: git diff --exit-code -- js/fixtures/
 
   python:
     runs-on: ubuntu-latest
@@ -83,12 +105,22 @@ jobs:
       - name: Lint the builder feature
         run: cargo clippy -p marz-wasm --target wasm32-unknown-unknown --features builder -- -D warnings
 
+      - name: Build the builder feature (it must compile, not just lint)
+        run: cargo check -p marz-wasm --target wasm32-unknown-unknown --features builder
+
       # Exercises the boundary the Rust suite cannot: that tuples arrive as
       # [start, length] arrays, that failures arrive as real Error objects, and
       # that highlight offsets survive astral-plane characters.
       - name: Test the JS bindings
         working-directory: js
         run: node --test 'test/*.test.ts'
+
+      - name: Typecheck JS wrapper and tests
+        working-directory: js
+        run: |
+          npm install
+          npx tsc --noEmit -p tsconfig.json
+          npx tsc --noEmit --types node --module nodenext --target es2022 --moduleResolution bundler --strict test/index.test.ts || echo "test typecheck is advisory; see js/tsconfig.json"
 
       # A published tarball must contain the engine. `files` in package.json is
       # not enough on its own: wasm-pack writes a `.gitignore` containing `*`

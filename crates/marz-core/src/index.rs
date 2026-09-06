@@ -163,11 +163,15 @@ impl MatchData {
             fields.insert(field.to_string(), Vec::new());
         }
         let entry = fields.get_mut(field).expect("just inserted");
-        for position in positions {
-            if !entry.contains(position) {
-                entry.push(*position);
-            }
+        if positions.is_empty() {
+            return;
         }
+        // Extend + sort + dedup instead of O(n²) `contains` per position.
+        // Posting positions are already ascending, so this is usually one
+        // linear pass; worst case is O(n log n), never quadratic.
+        entry.extend_from_slice(positions);
+        entry.sort_unstable();
+        entry.dedup();
     }
 
     /// Merge another match data object into this one.
@@ -176,11 +180,12 @@ impl MatchData {
             let entry = self.terms.entry(term.clone()).or_default();
             for (field, positions) in fields {
                 let target = entry.entry(field.clone()).or_default();
-                for position in positions {
-                    if !target.contains(position) {
-                        target.push(*position);
-                    }
+                if positions.is_empty() {
+                    continue;
                 }
+                target.extend_from_slice(positions);
+                target.sort_unstable();
+                target.dedup();
             }
         }
     }
@@ -208,9 +213,15 @@ struct FieldConfig {
 struct Stats {
     /// Total number of documents in the index.
     document_count: usize,
-    /// Length in tokens of each document field.
-    field_lengths: HashMap<FieldRef, usize>,
-    /// Mean field length per field name, over documents that have the field.
+    /// Length in tokens of each document field: `doc_ref -> field_name -> len`.
+    ///
+    /// Nested (not `HashMap<FieldRef, _>`) so scoring looks up
+    /// `get(doc).get(field)` with borrowed `&str` and zero allocation in the
+    /// hot loop.
+    field_lengths: HashMap<String, HashMap<String, usize>>,
+    /// Mean field length per field name, over documents that have the field
+    /// non-empty. Empty/missing fields are excluded (they would drag the
+    /// average toward zero and corrupt length normalization).
     average_field_lengths: HashMap<String, f64>,
     /// Per-field boosts configured at build time.
     field_boosts: HashMap<String, f64>,
@@ -227,7 +238,7 @@ pub struct IndexBuilder {
     language: LanguageRef,
     ref_field: String,
     fields: Vec<FieldConfig>,
-    field_lengths: HashMap<FieldRef, usize>,
+    field_lengths: HashMap<String, HashMap<String, usize>>,
     inverted_index: BTreeMap<String, Posting>,
     document_count: usize,
     doc_boosts: HashMap<String, f64>,
@@ -263,23 +274,45 @@ impl IndexBuilder {
     }
 
     /// Add a field to the index. `boost` defaults to `1.0`.
+    ///
+    /// Panics on an empty name or one containing `/`: field names are serialized
+    /// as `field/doc` in JSON, so a `/` never round-trips, and an empty name is
+    /// always a configuration bug. Failing fast beats a silently corrupt index.
+    /// Non-finite boosts fall back to `1.0`.
     pub fn field(&mut self, name: impl Into<String>, boost: f64) -> &mut Self {
-        self.fields.push(FieldConfig {
-            name: name.into(),
-            boost: boost.max(0.0),
-        });
+        let name = name.into();
+        assert!(!name.is_empty(), "field name must not be empty");
+        assert!(
+            !name.contains('/'),
+            "field name {name:?} must not contain '/' (breaks FieldRef round-trip)"
+        );
+        if self.fields.iter().any(|f| f.name == name) {
+            // Deduplicate: pushing twice would double-count `tf` at scoring time
+            // via duplicated field boosts. Keep the first declaration.
+            return self;
+        }
+        let boost = if boost.is_finite() {
+            boost.max(0.0)
+        } else {
+            1.0
+        };
+        self.fields.push(FieldConfig { name, boost });
         self
     }
 
-    /// Set the BM25 `k1` parameter.
+    /// Set the BM25 `k1` parameter. Non-finite or negative values keep `1.2`.
     pub fn k1(&mut self, k1: f64) -> &mut Self {
-        self.k1 = k1;
+        if k1.is_finite() && k1 >= 0.0 {
+            self.k1 = k1;
+        }
         self
     }
 
-    /// Set the BM25 `b` parameter, clamped to `[0, 1]`.
+    /// Set the BM25 `b` parameter, clamped to `[0, 1]`. Non-finite keeps `0.75`.
     pub fn b(&mut self, b: f64) -> &mut Self {
-        self.b = b.clamp(0.0, 1.0);
+        if b.is_finite() {
+            self.b = b.clamp(0.0, 1.0);
+        }
         self
     }
 
@@ -287,13 +320,28 @@ impl IndexBuilder {
     ///
     /// `field_getter` receives a field name and should return the raw text for
     /// that field, or `None` if the field is missing.
+    ///
+    /// Adding the same `doc_ref` twice **replaces** the previous document
+    /// (upsert): old postings are removed and `document_count` is not
+    /// incremented. Merging would double `tf` while overwriting field lengths,
+    /// corrupting BM25 statistics.
     pub fn add<F>(&mut self, doc_ref: impl Into<String>, doc_boost: f64, mut field_getter: F)
     where
         F: FnMut(&str) -> Option<String>,
     {
         let doc_ref = doc_ref.into();
-        self.doc_boosts.insert(doc_ref.clone(), doc_boost.max(0.0));
-        self.document_count += 1;
+        let doc_boost = if doc_boost.is_finite() {
+            doc_boost.max(0.0)
+        } else {
+            1.0
+        };
+        let is_update = self.doc_boosts.contains_key(&doc_ref);
+        if is_update {
+            self.remove_doc(&doc_ref);
+        } else {
+            self.document_count += 1;
+        }
+        self.doc_boosts.insert(doc_ref.clone(), doc_boost);
 
         let pipeline = Pipeline::new(self.language.clone());
 
@@ -302,8 +350,10 @@ impl IndexBuilder {
             let tokens = self.language.tokenize(&text);
             let terms = pipeline.run_index(tokens);
 
-            let field_ref = FieldRef::new(doc_ref.clone(), field.name.clone());
-            self.field_lengths.insert(field_ref, terms.len());
+            self.field_lengths
+                .entry(doc_ref.clone())
+                .or_default()
+                .insert(field.name.clone(), terms.len());
 
             for token in terms {
                 let position = token.position().unwrap_or((0, token.term.chars().count()));
@@ -324,11 +374,30 @@ impl IndexBuilder {
         }
     }
 
+    /// Remove all postings and lengths for `doc_ref` (upsert helper).
+    fn remove_doc(&mut self, doc_ref: &str) {
+        for posting in self.inverted_index.values_mut() {
+            for docs in posting.fields.values_mut() {
+                docs.remove(doc_ref);
+            }
+            // Drop fields left empty so `document_frequency` and serialization
+            // do not see ghost entries.
+            posting.fields.retain(|_, docs| !docs.is_empty());
+        }
+        self.inverted_index.retain(|_, p| !p.fields.is_empty());
+        self.field_lengths.remove(doc_ref);
+    }
+
     /// Consume the builder and produce a searchable [`Index`].
     pub fn build(self) -> Index {
-        let average_field_lengths = self.calculate_average_field_lengths();
-        let token_set =
-            TokenSet::from_sorted(&self.inverted_index.keys().cloned().collect::<Vec<_>>());
+        let field_names: Vec<String> = self
+            .fields
+            .iter()
+            .map(|f| f.name.clone())
+            .collect::<Vec<_>>();
+        let average_field_lengths =
+            Self::calculate_average_field_lengths_static(&self.field_lengths, &field_names);
+        let token_set = TokenSet::from_strs(self.inverted_index.keys().map(String::as_str));
 
         let stats = Stats {
             document_count: self.document_count,
@@ -353,21 +422,35 @@ impl IndexBuilder {
         }
     }
 
-    fn calculate_average_field_lengths(&self) -> HashMap<String, f64> {
+    fn calculate_average_field_lengths_static(
+        field_lengths: &HashMap<String, HashMap<String, usize>>,
+        field_names: &[String],
+    ) -> HashMap<String, f64> {
         let mut total: HashMap<&str, usize> = HashMap::new();
         let mut count: HashMap<&str, usize> = HashMap::new();
 
-        for (field_ref, length) in &self.field_lengths {
-            *total.entry(field_ref.field_name.as_str()).or_insert(0) += length;
-            *count.entry(field_ref.field_name.as_str()).or_insert(0) += 1;
+        for (doc_ref, fields) in field_lengths {
+            let _ = doc_ref;
+            for (field_name, length) in fields {
+                // Skip empty fields: the average is over docs that *have* the
+                // field, otherwise every sparse field drags its average to zero
+                // and breaks length normalization.
+                if *length == 0 {
+                    continue;
+                }
+                *total.entry(field_name.as_str()).or_insert(0) += length;
+                *count.entry(field_name.as_str()).or_insert(0) += 1;
+            }
         }
 
-        self.fields
+        field_names
             .iter()
-            .map(|field| {
-                let sum = total.get(field.name.as_str()).copied().unwrap_or(0) as f64;
-                let n = count.get(field.name.as_str()).copied().unwrap_or(1).max(1) as f64;
-                (field.name.clone(), sum / n)
+            .map(|name| {
+                let sum = total.get(name.as_str()).copied().unwrap_or(0) as f64;
+                let n = count.get(name.as_str()).copied().unwrap_or(0) as f64;
+                // No non-empty docs: 0.0 signals `score_term` to skip scoring.
+                let avg = if n > 0.0 { sum / n } else { 0.0 };
+                (name.clone(), avg)
             })
             .collect()
     }
@@ -436,11 +519,12 @@ impl Index {
             return 0.0;
         };
 
-        let field_ref = FieldRef::new(doc_ref, field_name);
+        // Zero-allocation nested lookup: `doc -> field -> len`.
         let field_length = self
             .stats
             .field_lengths
-            .get(&field_ref)
+            .get(doc_ref)
+            .and_then(|m| m.get(field_name))
             .copied()
             .unwrap_or(0) as f64;
         let average_length = self
@@ -477,6 +561,11 @@ impl Index {
     }
 
     /// Expand a clause term into the set of indexed terms it matches.
+    ///
+    /// A term containing `*` is always a wildcard, even when `edits` is also
+    /// set (`foo*~1`): fuzzy+wildcard is not a defined combination, and scoring
+    /// it as fuzzy would silently drop the wildcard. Documented here rather
+    /// than rejected so `term*~N` keeps returning wildcard matches.
     fn expand_clause_term(
         &self,
         clause_term: &str,
@@ -494,9 +583,9 @@ impl Index {
 
     /// Boost multiplier for `term` in one document field, from phrase matches.
     ///
-    /// Returns `1.0` (no change) unless `term` belongs to a query phrase that
-    /// genuinely occurs in this field. Word-tokenized languages never produce
-    /// phrases, so they take the empty-slice fast path and pay nothing.
+    /// Multiplicative per verified phrase, per field: two verified phrases give
+    /// `PHRASE_BOOST²`. Word-tokenized languages never produce phrases, so they
+    /// take the empty-slice fast path and pay nothing.
     fn phrase_boost_for(
         &self,
         phrases: &[Phrase],
@@ -505,6 +594,7 @@ impl Index {
         doc_ref: &str,
         cache: &mut VerificationCache,
     ) -> f64 {
+        let mut boost = 1.0;
         for (i, phrase) in phrases.iter().enumerate() {
             if !phrase.contains(term) {
                 continue;
@@ -517,10 +607,10 @@ impl Index {
                     .map(|posting_doc| posting_doc.positions.as_slice())
             });
             if verified {
-                return PHRASE_BOOST;
+                boost *= PHRASE_BOOST;
             }
         }
-        1.0
+        boost
     }
 
     fn execute_query(&self, query: &Query) -> Vec<SearchResult> {
@@ -682,26 +772,41 @@ impl Index {
     /// Every document reference known to the index.
     fn all_doc_refs(&self) -> Vec<&str> {
         let mut refs: HashSet<&str> = HashSet::new();
-        for field_ref in self.stats.field_lengths.keys() {
-            refs.insert(field_ref.doc_ref.as_str());
+        for doc_ref in self.stats.field_lengths.keys() {
+            refs.insert(doc_ref.as_str());
+        }
+        for doc_ref in self.stats.doc_boosts.keys() {
+            refs.insert(doc_ref.as_str());
         }
         refs.into_iter().collect()
     }
 
     /// Serialize the index to a JSON string.
+    ///
+    /// Deterministic: inner maps are sorted by field name and doc ref so two
+    /// builds of the same corpus produce byte-identical JSON.
     pub fn to_json(&self) -> String {
         let inverted_index: Vec<(String, SerializedPosting)> = self
             .inverted_index
             .iter()
             .map(|(term, posting)| {
-                let fields = posting
+                let mut field_names: Vec<&String> = posting
                     .fields
                     .iter()
                     .filter(|(_, docs)| !docs.is_empty())
-                    .map(|(field_name, docs)| {
-                        let docs = docs
-                            .iter()
-                            .map(|(doc_ref, posting_doc)| {
+                    .map(|(field_name, _)| field_name)
+                    .collect();
+                field_names.sort();
+                let fields = field_names
+                    .into_iter()
+                    .map(|field_name| {
+                        let docs_map = &posting.fields[field_name];
+                        let mut doc_refs: Vec<&String> = docs_map.keys().collect();
+                        doc_refs.sort();
+                        let docs = doc_refs
+                            .into_iter()
+                            .map(|doc_ref| {
+                                let posting_doc = &docs_map[doc_ref];
                                 (
                                     doc_ref.clone(),
                                     SerializedPostingDoc {
@@ -718,12 +823,12 @@ impl Index {
             })
             .collect();
 
-        let mut field_lengths: Vec<(String, usize)> = self
-            .stats
-            .field_lengths
-            .iter()
-            .map(|(field_ref, len)| (field_ref.to_string(), *len))
-            .collect();
+        let mut field_lengths: Vec<(String, usize)> = Vec::new();
+        for (doc_ref, fields) in &self.stats.field_lengths {
+            for (field_name, len) in fields {
+                field_lengths.push((FieldRef::new(doc_ref, field_name).to_string(), *len));
+            }
+        }
         field_lengths.sort();
 
         let mut doc_boosts: Vec<(String, f64)> = self
@@ -758,8 +863,24 @@ impl Index {
     /// Load a previously serialized index.
     ///
     /// The `language` must match the tokenizer/pipeline used to build the index.
+    /// A version mismatch or a language mismatch is rejected rather than
+    /// silently producing wrong rankings.
     pub fn load(json: &str, language: LanguageRef) -> Result<Self, serde_json::Error> {
         let serialized: SerializedIndex = serde_json::from_str(json)?;
+
+        if serialized.version != INDEX_VERSION {
+            return Err(serde::de::Error::custom(format!(
+                "index version {:?} is not supported (this build reads {:?})",
+                serialized.version, INDEX_VERSION
+            )));
+        }
+        if serialized.language != language.code() {
+            return Err(serde::de::Error::custom(format!(
+                "index was built for language {:?}, not {:?}",
+                serialized.language,
+                language.code()
+            )));
+        }
 
         let mut inverted_index: BTreeMap<String, Posting> = BTreeMap::new();
         for (term, sp) in serialized.inverted_index {
@@ -790,11 +911,15 @@ impl Index {
             inverted_index.insert(term, posting);
         }
 
-        let field_lengths = serialized
-            .field_lengths
-            .into_iter()
-            .filter_map(|(key, len)| FieldRef::from_string(&key).map(|fr| (fr, len)))
-            .collect();
+        let mut field_lengths: HashMap<String, HashMap<String, usize>> = HashMap::new();
+        for (key, len) in serialized.field_lengths {
+            if let Some(fr) = FieldRef::from_string(&key) {
+                field_lengths
+                    .entry(fr.doc_ref().to_string())
+                    .or_default()
+                    .insert(fr.field_name().to_string(), len);
+            }
+        }
 
         let field_boosts = serialized
             .fields
@@ -819,7 +944,7 @@ impl Index {
             b: serialized.b,
         };
 
-        let token_set = TokenSet::from_sorted(&inverted_index.keys().cloned().collect::<Vec<_>>());
+        let token_set = TokenSet::from_strs(inverted_index.keys().map(String::as_str));
 
         Ok(Index {
             inverted_index,
@@ -859,12 +984,19 @@ impl Index {
     /// directly to read postings straight out of a mapped buffer.
     ///
     /// The `language` must match the one the index was built with; a mismatch
-    /// makes query tokenization disagree with the indexed terms.
+    /// makes query tokenization disagree with the indexed terms and is rejected.
     pub fn from_binary(
         bytes: &[u8],
         language: LanguageRef,
     ) -> Result<Self, crate::binary::FormatError> {
         let binary = crate::binary::BinaryIndex::open(bytes)?;
+
+        if binary.language() != language.code() {
+            return Err(crate::binary::FormatError::LanguageMismatch {
+                expected: language.code().to_string(),
+                found: binary.language().to_string(),
+            });
+        }
 
         // Resolve ids to strings once. A posting list references a document by
         // id many times over, so decoding the reference per reference would make
@@ -906,14 +1038,14 @@ impl Index {
             inverted_index.insert(term, posting);
         }
 
-        let mut field_lengths: HashMap<FieldRef, usize> = HashMap::new();
+        let mut field_lengths: HashMap<String, HashMap<String, usize>> = HashMap::new();
         for (doc_id, doc_ref) in doc_refs.iter().enumerate() {
             for (field_id, field_name) in fields.iter().enumerate() {
                 let length = binary.field_length(doc_id as u32, field_id as u32)?;
-                field_lengths.insert(
-                    FieldRef::new(doc_ref.clone(), field_name.clone()),
-                    length as usize,
-                );
+                field_lengths
+                    .entry(doc_ref.clone())
+                    .or_default()
+                    .insert(field_name.clone(), length as usize);
             }
         }
 
@@ -937,7 +1069,7 @@ impl Index {
             b: binary.b(),
         };
 
-        let token_set = TokenSet::from_sorted(&inverted_index.keys().cloned().collect::<Vec<_>>());
+        let token_set = TokenSet::from_strs(inverted_index.keys().map(String::as_str));
 
         Ok(Index {
             inverted_index,
@@ -981,23 +1113,30 @@ fn satisfies_required(required: Option<&HashSet<&str>>, doc_ref: &str) -> bool {
 ///
 /// The averages are derived on load rather than serialized, since they are a
 /// pure function of data already present and would otherwise be one more thing
-/// that can disagree with itself.
+/// that can disagree with itself. Empty fields are excluded: the average is
+/// over docs that *have* the field.
 fn average_field_lengths(
-    field_lengths: &HashMap<FieldRef, usize>,
+    field_lengths: &HashMap<String, HashMap<String, usize>>,
     fields: &[String],
 ) -> HashMap<String, f64> {
     let mut total: HashMap<&str, usize> = HashMap::new();
     let mut count: HashMap<&str, usize> = HashMap::new();
-    for (field_ref, len) in field_lengths {
-        *total.entry(field_ref.field_name.as_str()).or_insert(0) += len;
-        *count.entry(field_ref.field_name.as_str()).or_insert(0) += 1;
+    for fields_map in field_lengths.values() {
+        for (field_name, len) in fields_map {
+            if *len == 0 {
+                continue;
+            }
+            *total.entry(field_name.as_str()).or_insert(0) += len;
+            *count.entry(field_name.as_str()).or_insert(0) += 1;
+        }
     }
     fields
         .iter()
         .map(|name| {
             let sum = total.get(name.as_str()).copied().unwrap_or(0) as f64;
-            let n = count.get(name.as_str()).copied().unwrap_or(1).max(1) as f64;
-            (name.clone(), sum / n)
+            let n = count.get(name.as_str()).copied().unwrap_or(0) as f64;
+            let avg = if n > 0.0 { sum / n } else { 0.0 };
+            (name.clone(), avg)
         })
         .collect()
 }

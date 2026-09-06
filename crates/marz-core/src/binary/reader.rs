@@ -186,7 +186,20 @@ impl<'a> BinaryIndex<'a> {
         let doc_count = self.header.doc_count as usize;
         let field_count = self.header.field_count as usize;
         // (doc_count + 1) offsets, doc_count boosts, doc_count * field_count lengths.
-        self.doc_heap_base = (doc_count + 1) * 4 + doc_count * 8 + doc_count * field_count * 4;
+        // All checked: a malicious header must yield `Truncated`, never wrap in
+        // release or panic in debug.
+        let offsets = (doc_count.checked_add(1))
+            .and_then(|n| n.checked_mul(4))
+            .ok_or(FormatError::Truncated { section: "docs" })?;
+        let boosts =
+            (doc_count.checked_mul(8)).ok_or(FormatError::Truncated { section: "docs" })?;
+        let matrix = (doc_count.checked_mul(field_count))
+            .and_then(|n| n.checked_mul(4))
+            .ok_or(FormatError::Truncated { section: "docs" })?;
+        self.doc_heap_base = offsets
+            .checked_add(boosts)
+            .and_then(|n| n.checked_add(matrix))
+            .ok_or(FormatError::Truncated { section: "docs" })?;
         let docs_len = (self.header.terms_offset - self.header.docs_offset) as usize;
         if self.doc_heap_base > docs_len {
             return Err(FormatError::Truncated { section: "docs" });
@@ -194,7 +207,15 @@ impl<'a> BinaryIndex<'a> {
 
         let term_count = self.header.term_count as usize;
         // (block_count + 1) block offsets, (term_count + 1) postings offsets.
-        self.dictionary_base = (self.header.term_block_count() + 1) * 4 + (term_count + 1) * 4;
+        let block_offsets = (self.header.term_block_count().checked_add(1))
+            .and_then(|n| n.checked_mul(4))
+            .ok_or(FormatError::Truncated { section: "terms" })?;
+        let postings_table = (term_count.checked_add(1))
+            .and_then(|n| n.checked_mul(4))
+            .ok_or(FormatError::Truncated { section: "terms" })?;
+        self.dictionary_base = block_offsets
+            .checked_add(postings_table)
+            .ok_or(FormatError::Truncated { section: "terms" })?;
         let terms_len = (self.header.postings_offset - self.header.terms_offset) as usize;
         if self.dictionary_base > terms_len {
             return Err(FormatError::Truncated { section: "terms" });
@@ -382,6 +403,9 @@ impl<'a> BinaryIndex<'a> {
         let mut count = 0u64;
         for doc_id in 0..self.header.doc_count {
             let length = self.field_length(doc_id, field_id)?;
+            if length == 0 {
+                continue;
+            }
             total += u64::from(length);
             count += 1;
         }
@@ -650,14 +674,14 @@ impl<'a> BinaryIndex<'a> {
 mod tests {
     use super::super::writer::{write_index, IndexSnapshot};
     use super::*;
-    use crate::index::{FieldRef, Posting, PostingDoc};
+    use crate::index::{Posting, PostingDoc};
     use std::collections::{BTreeMap, HashMap};
 
     struct Fixture {
         fields: Vec<String>,
         field_boosts: HashMap<String, f64>,
         doc_boosts: HashMap<String, f64>,
-        field_lengths: HashMap<FieldRef, usize>,
+        field_lengths: HashMap<String, HashMap<String, usize>>,
         inverted_index: BTreeMap<String, Posting>,
     }
 
@@ -692,10 +716,16 @@ mod tests {
             .enumerate()
             .map(|(i, d)| (d.to_string(), 1.0 + i as f64))
             .collect();
-        let mut field_lengths = HashMap::new();
+        let mut field_lengths: HashMap<String, HashMap<String, usize>> = HashMap::new();
         for (i, doc) in docs.iter().enumerate() {
-            field_lengths.insert(FieldRef::new(*doc, "title"), 3 + i);
-            field_lengths.insert(FieldRef::new(*doc, "body"), 40 + i * 7);
+            field_lengths
+                .entry(doc.to_string())
+                .or_default()
+                .insert("title".to_string(), 3 + i);
+            field_lengths
+                .entry(doc.to_string())
+                .or_default()
+                .insert("body".to_string(), 40 + i * 7);
         }
 
         // 40 terms forces three blocks at TERMS_PER_BLOCK = 16.

@@ -69,9 +69,18 @@ export function initialize(source?: WasmSource): Promise<unknown> {
   // The object form: wasm-bindgen deprecated passing the source positionally
   // and warns on every call. Omit the argument entirely when there is none, so
   // that a browser still gets the default resolution.
-  ready ??= source === undefined
-    ? init()
-    : init({ module_or_path: source });
+  //
+  // `??=` would cache a rejection forever and ignore a later source (e.g. a
+  // second `initialize(bytes)` after a bare `initialize()`). Assign only when
+  // uninitialized, and clear on failure so the next call retries.
+  if (!ready) {
+    const p =
+      source === undefined ? init() : init({ module_or_path: source });
+    ready = p.catch((e) => {
+      ready = undefined;
+      throw e;
+    });
+  }
   return ready;
 }
 
@@ -91,8 +100,9 @@ export function initialize(source?: WasmSource): Promise<unknown> {
 export async function load(
   source: string | URL | Request | ArrayBuffer | Uint8Array,
   expectedLanguage?: string,
+  wasmSource?: WasmSource,
 ): Promise<MarzIndex> {
-  await initialize();
+  await initialize(wasmSource);
 
   let bytes: Uint8Array;
   if (source instanceof Uint8Array) {
@@ -151,6 +161,24 @@ export async function indexLanguage(
  * query for `検索` matches a document that never contains that word delimited by
  * spaces. No bigram crosses the Han/Katakana boundary — `索エ` would span two
  * words — so script changes recover real word boundaries for free.
+ *
+ * Async only to cover WASM initialization; after `initialize()` the work itself
+ * is synchronous (unlike `MarzIndex.search`, which is sync). The `await` is
+ * still required on first use under Node/SSR.
+ */
+export async function tokenize(
+  text: string,
+  language: string,
+): Promise<string[]> {
+  await initialize();
+  return wasmTokenize(text, language);
+}
+
+/**
+ * Apply the normalization the indexer applies before tokenizing.
+ *
+ * Match positions are offsets into this string, not into the input. See
+ * {@link highlight}. Async only for initialization — see {@link tokenize}.
  */
 export async function tokenize(
   text: string,
@@ -221,6 +249,12 @@ export async function highlight(
   text: string,
 ): Promise<Segment[]> {
   await initialize();
+  if (!hit || typeof (hit as SearchResult).matches !== "object" || (hit as SearchResult).matches === null) {
+    throw new Error("highlight: hit.matches must be an object");
+  }
+  if (typeof text !== "string" || typeof field !== "string") {
+    throw new Error("highlight: field and text must be strings");
+  }
   const normalized = wasmNormalize(text);
   // Code points, so that offsets line up on text containing astral-plane
   // characters. `[...string]` iterates code points; indexing does not.

@@ -34,8 +34,14 @@ pub use token::Token;
 ///
 /// Formula: log(1 + abs((N - df + 0.5) / (df + 0.5)))
 pub fn idf(document_count: usize, doc_frequency: usize) -> f64 {
+    debug_assert!(
+        doc_frequency <= document_count,
+        "df ({doc_frequency}) > N ({document_count}): corrupt index"
+    );
     let n = document_count as f64;
-    let df = doc_frequency as f64;
+    // Clamp: a corrupt index with df > N would otherwise be masked by `abs`
+    // into a plausible-looking but wrong ranking.
+    let df = (doc_frequency.min(document_count)) as f64;
     let x = (n - df + 0.5) / (df + 0.5);
     (1.0 + x.abs()).ln()
 }
@@ -60,6 +66,20 @@ pub fn bm25_weight(
     field_boost: f64,
     doc_boost: f64,
 ) -> f64 {
+    // Public function: callers other than `Index::score_term` offer no guard,
+    // and without this `avg == 0` yields `inf`/`NaN` scores.
+    if !tf.is_finite() || !avg_field_len.is_finite() || tf <= 0.0 || avg_field_len <= 0.0 {
+        return 0.0;
+    }
+    if !idf.is_finite() || !field_boost.is_finite() || !doc_boost.is_finite() {
+        return 0.0;
+    }
+    let k1 = if k1.is_finite() && k1 >= 0.0 { k1 } else { 1.2 };
+    let b = if b.is_finite() {
+        b.clamp(0.0, 1.0)
+    } else {
+        0.75
+    };
     let denom = k1 * (1.0 - b + b * (field_len / avg_field_len)) + tf;
     let score = idf * ((k1 + 1.0) * tf) / denom;
     let score = score * field_boost * doc_boost;

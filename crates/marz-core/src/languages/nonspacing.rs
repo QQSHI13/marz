@@ -181,8 +181,7 @@ mod tests {
     #[test]
     fn bigrams_overlap_by_one_cluster() {
         let tokens = lang("th").tokenize("การค้นหาข้อมูล");
-        let positions: Vec<(usize, usize)> =
-            tokens.iter().filter_map(|t| t.position()).collect();
+        let positions: Vec<(usize, usize)> = tokens.iter().filter_map(|t| t.position()).collect();
         assert!(positions.len() > 5);
         for pair in positions.windows(2) {
             let ((start, len), (next, _)) = (pair[0], pair[1]);

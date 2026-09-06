@@ -79,6 +79,16 @@ fn language_for(code: &str) -> Arc<dyn Language> {
     resolved.language
 }
 
+/// Resolve without warning, for the load path.
+///
+/// An index header legitimately stores fallback codes like `vi`/`he`/`uk`:
+/// they tokenize correctly on whitespace, they simply have no stemmer.
+/// Warning on every page load for a working index would train callers to ignore
+/// the warning that catches real typos at build time.
+fn language_for_load(code: &str) -> Arc<dyn Language> {
+    registry::resolve(code).language
+}
+
 /// Build a JavaScript `Error` to throw.
 ///
 /// Every failure path goes through this rather than `JsValue::from_str`, which
@@ -96,7 +106,12 @@ fn error(message: &str) -> JsValue {
 /// refusal cannot happen; propagating it would put a `?` on twenty lines to
 /// describe a state that does not exist.
 fn set(target: &js_sys::Object, key: &str, value: &JsValue) {
-    let _ = js_sys::Reflect::set(target, &JsValue::from_str(key), value);
+    let result = js_sys::Reflect::set(target, &JsValue::from_str(key), value);
+    debug_assert!(
+        matches!(result, Ok(true)),
+        "Reflect::set failed for fresh object key {key:?}"
+    );
+    let _ = result;
 }
 
 /// Language codes this build supports.
@@ -236,9 +251,11 @@ impl MarzIndex {
             }
         }
 
-        let language = language_for(&stored);
+        // Silent resolve: `vi`/`he`/fallback codes are legitimate stored
+        // languages, not typos — warning here would fire on every page load.
+        let language = language_for_load(&stored);
         let index = Index::from_binary(bytes, language)
-            .map_err(|e| error(&format!("could not read index: {e}")))?;
+            .map_err(|e| error(&format!("not a Marz index: {e}")))?;
 
         Ok(MarzIndex {
             index,
@@ -258,21 +275,41 @@ impl MarzIndex {
     ///
     /// Throws an `Error` if the query cannot be parsed. The error carries
     /// `query` plus `start` and `end` offsets into it, enough to underline the
-    /// fault in a search box.
+    /// fault in a search box. `start`/`end` are character offsets, not UTF-16
+    /// units — convert with `Array.from(query)` if highlighting astral text.
     #[wasm_bindgen(unchecked_return_type = "SearchResult[]")]
-    pub fn search(&self, query: &str, limit: Option<usize>) -> Result<js_sys::Array, JsValue> {
+    pub fn search(&self, query: &str, limit: Option<f64>) -> Result<js_sys::Array, JsValue> {
         let results = self.index.search(query).map_err(|e| {
             let err = js_sys::Error::new(&format!("{} in query {query:?}", e.message));
             // On the error rather than in the message, so that `err.message`
             // stays a sentence a user can be shown while a caller that wants to
             // highlight the span can still find it.
+            debug_assert!(js_sys::Reflect::set(&err, &"query".into(), &query.into()).is_ok());
+            debug_assert!(
+                js_sys::Reflect::set(&err, &"start".into(), &(e.start as f64).into()).is_ok()
+            );
+            debug_assert!(
+                js_sys::Reflect::set(&err, &"end".into(), &(e.end as f64).into()).is_ok()
+            );
             let _ = js_sys::Reflect::set(&err, &"query".into(), &query.into());
             let _ = js_sys::Reflect::set(&err, &"start".into(), &(e.start as f64).into());
             let _ = js_sys::Reflect::set(&err, &"end".into(), &(e.end as f64).into());
             JsValue::from(err)
         })?;
 
-        let take = limit.unwrap_or(usize::MAX);
+        let take = match limit {
+            None => usize::MAX,
+            Some(v) => {
+                if !v.is_finite() || v < 0.0 || v.fract() != 0.0 {
+                    return Err(error(&format!(
+                        "limit must be a non-negative integer, got {v}"
+                    )));
+                }
+                // Clamp absurdly large values (2**53) rather than trying to
+                // allocate: they mean "no limit" in practice.
+                v.min(usize::MAX as f64) as usize
+            }
+        };
         let out = js_sys::Array::new();
         for result in results.iter().take(take) {
             let hit = js_sys::Object::new();

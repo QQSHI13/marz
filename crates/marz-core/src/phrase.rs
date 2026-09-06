@@ -157,12 +157,13 @@ where
         if positions.is_empty() {
             return false;
         }
-        // Sorted so the alignment check below can binary search. Positions are
-        // already appended in ascending order during indexing, but sorting
-        // makes the requirement local rather than an assumption about a caller
-        // in another module.
+        // Positions are appended in ascending order during indexing; only sort
+        // when a caller hands us something unsorted, so the common path pays
+        // no `O(n log n)`.
         let mut term_starts: Vec<usize> = positions.iter().map(|(start, _)| *start).collect();
-        term_starts.sort_unstable();
+        if !term_starts.windows(2).all(|w| w[0] <= w[1]) {
+            term_starts.sort_unstable();
+        }
         term_starts.dedup();
         starts.push(term_starts);
     }
@@ -183,7 +184,13 @@ where
             continue;
         };
         let all_present = phrase.offsets.iter().enumerate().all(|(i, offset)| {
-            i == anchor || starts[i].binary_search(&(phrase_start + offset)).is_ok()
+            if i == anchor {
+                return true;
+            }
+            let Some(want) = phrase_start.checked_add(*offset) else {
+                return false;
+            };
+            starts[i].binary_search(&want).is_ok()
         });
         if all_present {
             return true;
@@ -197,9 +204,12 @@ where
 /// Verification is per (phrase, field, document), but a clause adds a score for
 /// every phrase term separately, so without a cache the same check would run
 /// once per term.
+///
+/// Two-level map so lookups borrow `field`/`doc_ref` without allocating the
+/// `(String, String)` key on every hit: only a miss (once per triple) clones.
 #[derive(Debug, Default)]
 pub struct VerificationCache {
-    results: HashMap<(usize, String, String), bool>,
+    results: HashMap<usize, HashMap<String, HashMap<String, bool>>>,
 }
 
 impl VerificationCache {
@@ -215,12 +225,20 @@ impl VerificationCache {
     where
         F: FnMut(&str) -> Option<&'a [(usize, usize)]>,
     {
-        let key = (phrase_index, field.to_string(), doc_ref.to_string());
-        if let Some(&cached) = self.results.get(&key) {
-            return cached;
+        if let Some(by_field) = self.results.get(&phrase_index) {
+            if let Some(by_doc) = by_field.get(field) {
+                if let Some(&cached) = by_doc.get(doc_ref) {
+                    return cached;
+                }
+            }
         }
         let verdict = verify(phrase, positions_for);
-        self.results.insert(key, verdict);
+        self.results
+            .entry(phrase_index)
+            .or_default()
+            .entry(field.to_string())
+            .or_default()
+            .insert(doc_ref.to_string(), verdict);
         verdict
     }
 }

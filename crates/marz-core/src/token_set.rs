@@ -39,6 +39,19 @@ impl TokenSet {
         set
     }
 
+    /// Build a token set from borrowed terms without cloning them first.
+    ///
+    /// Prefer this at index-build/load time: the previous call pattern
+    /// `keys().cloned().collect::<Vec<_>>()` allocated every term only to
+    /// re-borrow it here.
+    pub fn from_strs<'a>(terms: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut set = Self::new();
+        for term in terms {
+            set.insert(term);
+        }
+        set
+    }
+
     /// Insert a term into the set.
     pub fn insert(&mut self, term: &str) {
         let mut node = &mut self.root;
@@ -60,7 +73,7 @@ impl TokenSet {
                 visited: HashSet::new(),
                 results: Vec::new(),
             };
-            walk.visit(&self.root, 0, String::new());
+            walk.run(&self.root);
             walk.results
         } else if self.contains(term) {
             vec![term.to_string()]
@@ -137,7 +150,7 @@ impl TokenSet {
             max_edits,
             results: Vec::new(),
         };
-        walk.visit(&self.root, String::new(), &initial, None);
+        walk.run(&self.root, &initial);
         walk.results
     }
 }
@@ -179,31 +192,68 @@ impl WildcardWalk {
     /// function of `node` — which makes `(node, at)` the complete state, and
     /// visiting it twice pure duplicated work. Skipping repeats bounds the walk
     /// at one visit per node per pattern position.
+    ///
+    /// Iterative with an explicit stack: a 10k-character spaceless token
+    /// (URL, minified JS) would otherwise recurse 10k deep and overflow.
+    fn run(&mut self, root: &Node) {
+        // (node pointer as usize is safe: `root` outlives the walk and nodes
+        // are never moved while borrowed through `&`.)
+        let mut stack: Vec<(*const Node, usize, String)> =
+            vec![(root as *const Node, 0, String::new())];
+        while let Some((ptr, at, prefix)) = stack.pop() {
+            // SAFETY: `ptr` comes from a live `&Node` ancestor of `root`.
+            let node: &Node = unsafe { &*ptr };
+            if !self.visited.insert((ptr as usize, at)) {
+                continue;
+            }
+            if at == self.pattern.len() {
+                if node.final_ {
+                    self.results.push(prefix);
+                }
+                continue;
+            }
+            if self.pattern[at] == '*' {
+                stack.push((ptr, at + 1, prefix.clone()));
+                for (edge_ch, edge_node) in &node.edges {
+                    let mut extended = prefix.clone();
+                    extended.push(*edge_ch);
+                    stack.push((edge_node as *const Node, at, extended));
+                }
+            } else if let Some(edge_node) = node.edges.get(&self.pattern[at]) {
+                let mut extended = prefix;
+                extended.push(self.pattern[at]);
+                stack.push((edge_node as *const Node, at + 1, extended));
+            }
+        }
+    }
+
+    /// Recursive entry kept for tests/docs; delegates to [`Self::run`].
+    #[allow(dead_code)]
     fn visit(&mut self, node: &Node, at: usize, prefix: String) {
-        if !self.visited.insert((node as *const Node as usize, at)) {
-            return;
-        }
-
-        if at == self.pattern.len() {
-            if node.final_ {
-                self.results.push(prefix);
+        let mut stack = vec![(node as *const Node, at, prefix)];
+        while let Some((ptr, at, prefix)) = stack.pop() {
+            let node: &Node = unsafe { &*ptr };
+            if !self.visited.insert((ptr as usize, at)) {
+                continue;
             }
-            return;
-        }
-
-        if self.pattern[at] == '*' {
-            // Match zero characters here, then let the recursion try one more
-            // at each child — between them these cover every length.
-            self.visit(node, at + 1, prefix.clone());
-            for (edge_ch, edge_node) in &node.edges {
-                let mut extended = prefix.clone();
-                extended.push(*edge_ch);
-                self.visit(edge_node, at, extended);
+            if at == self.pattern.len() {
+                if node.final_ {
+                    self.results.push(prefix);
+                }
+                continue;
             }
-        } else if let Some(edge_node) = node.edges.get(&self.pattern[at]) {
-            let mut extended = prefix;
-            extended.push(self.pattern[at]);
-            self.visit(edge_node, at + 1, extended);
+            if self.pattern[at] == '*' {
+                stack.push((ptr, at + 1, prefix.clone()));
+                for (edge_ch, edge_node) in &node.edges {
+                    let mut extended = prefix.clone();
+                    extended.push(*edge_ch);
+                    stack.push((edge_node as *const Node, at, extended));
+                }
+            } else if let Some(edge_node) = node.edges.get(&self.pattern[at]) {
+                let mut extended = prefix;
+                extended.push(self.pattern[at]);
+                stack.push((edge_node as *const Node, at + 1, extended));
+            }
         }
     }
 }
@@ -220,48 +270,74 @@ struct FuzzyWalk<'a> {
     results: Vec<String>,
 }
 
+/// One entry of the fuzzy-walk stack: node, prefix, edit row, row minimum,
+///
+/// parent row + char for the transposition rule.
+type FuzzyStackEntry = (
+    *const Node,
+    String,
+    Vec<usize>,
+    usize,
+    Option<(Vec<usize>, char)>,
+);
+
 impl FuzzyWalk<'_> {
-    /// Visit one trie node, whose path from the root spells `prefix`.
+    /// Iterative trie walk carrying one edit-matrix row per stack entry.
     ///
-    /// `current` is the edit-matrix row for `prefix`, and `previous` is the row
-    /// for `prefix` minus its last character, paired with that character. Both
-    /// are needed to price a transposition, which compares the candidate's last
-    /// two characters against the pattern's and reaches back two rows.
-    fn visit(
-        &mut self,
-        node: &Node,
-        prefix: String,
-        current: &[usize],
-        previous: Option<(&[usize], char)>,
-    ) {
-        if node.final_ && current[self.pattern.len()] <= self.max_edits {
-            self.results.push(prefix.clone());
-        }
-
-        // Every entry in a row is at least the minimum of the row above it, and
-        // at most one more, so once the whole row exceeds the budget no
-        // descendant can come back under it. That holds with transpositions
-        // too: a transposition costs one more than an entry two rows up, which
-        // by the same bound is no less than the minimum of the row above.
-        if current.iter().all(|&d| d > self.max_edits) {
-            return;
-        }
-
-        for (edge_ch, edge_node) in &node.edges {
-            let next = self.next_row(*edge_ch, current, previous);
-            let mut new_prefix = prefix.clone();
-            new_prefix.push(*edge_ch);
-            self.visit(edge_node, new_prefix, &next, Some((current, *edge_ch)));
+    /// Recursive depth equals term length; a 10k-character token would overflow.
+    /// Each stack entry also carries its row's minimum so pruning does not
+    /// re-scan the full row (`O(pattern)` per node) on top of the `O(pattern)`
+    /// row computation.
+    fn run(&mut self, root: &Node, initial: &[usize]) {
+        let init_min = *initial.iter().min().unwrap_or(&usize::MAX);
+        // Parent row is cloned only along the current path (small budgets keep
+        // rows short); the common case prunes early.
+        let mut stack: Vec<FuzzyStackEntry> = vec![(
+            root as *const Node,
+            String::new(),
+            initial.to_vec(),
+            init_min,
+            None,
+        )];
+        while let Some((ptr, prefix, current, current_min, previous)) = stack.pop() {
+            // SAFETY: pointers derive from live `&Node`s under `root`.
+            let node: &Node = unsafe { &*ptr };
+            if node.final_ && current[self.pattern.len()] <= self.max_edits {
+                self.results.push(prefix.clone());
+            }
+            if current_min > self.max_edits {
+                continue;
+            }
+            for (edge_ch, edge_node) in &node.edges {
+                let prev_ref = previous.as_ref().map(|(r, c)| (r.as_slice(), *c));
+                let (next, next_min) = self.next_row_with_min(*edge_ch, &current, prev_ref);
+                let mut new_prefix = prefix.clone();
+                new_prefix.push(*edge_ch);
+                let parent = Some((current.clone(), *edge_ch));
+                stack.push((edge_node as *const Node, new_prefix, next, next_min, parent));
+            }
         }
     }
 
-    /// Edit-matrix row for the candidate extended by `edge_ch`.
+    /// Same as [`Self::next_row_with_min`] without the minimum, kept for tests.
+    #[allow(dead_code)]
     fn next_row(
         &self,
         edge_ch: char,
         current: &[usize],
         previous: Option<(&[usize], char)>,
     ) -> Vec<usize> {
+        self.next_row_with_min(edge_ch, current, previous).0
+    }
+
+    /// Same as [`Self::next_row`] plus the row minimum for pruning without a
+    /// second scan.
+    fn next_row_with_min(
+        &self,
+        edge_ch: char,
+        current: &[usize],
+        previous: Option<(&[usize], char)>,
+    ) -> (Vec<usize>, usize) {
         let mut next = Vec::with_capacity(self.pattern.len() + 1);
         // Matching the empty pattern means deleting the whole candidate.
         next.push(current[0] + 1);
@@ -283,7 +359,8 @@ impl FuzzyWalk<'_> {
             }
             next.push(best);
         }
-        next
+        let min = *next.iter().min().unwrap_or(&usize::MAX);
+        (next, min)
     }
 }
 

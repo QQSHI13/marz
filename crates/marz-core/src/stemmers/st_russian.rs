@@ -5,8 +5,8 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
 struct Context {
@@ -66,10 +66,7 @@ static A_2: &'static [Among<Context>; 8] = &[
     Among("нн", -1, 1, None),
 ];
 
-static A_3: &'static [Among<Context>; 2] = &[
-    Among("сь", -1, 1, None),
-    Among("ся", -1, 1, None),
-];
+static A_3: &'static [Among<Context>; 2] = &[Among("сь", -1, 1, None), Among("ся", -1, 1, None)];
 
 static A_4: &'static [Among<Context>; 46] = &[
     Among("ыт", -1, 2, None),
@@ -159,10 +156,7 @@ static A_5: &'static [Among<Context>; 36] = &[
     Among("о", -1, 1, None),
 ];
 
-static A_6: &'static [Among<Context>; 2] = &[
-    Among("ост", -1, 1, None),
-    Among("ость", -1, 1, None),
-];
+static A_6: &'static [Among<Context>; 2] = &[Among("ост", -1, 1, None), Among("ость", -1, 1, None)];
 
 static A_7: &'static [Among<Context>; 4] = &[
     Among("ейш", -1, 1, None),
@@ -199,7 +193,7 @@ fn r_mark_regions(env: &mut SnowballEnv, context: &mut Context) -> bool {
         break 'lab0;
     }
     env.cursor = v_1;
-    return true
+    return true;
 }
 
 fn r_perfective_gerund(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -229,9 +223,9 @@ fn r_perfective_gerund(env: &mut SnowballEnv, context: &mut Context) -> bool {
         2 => {
             env.slice_del();
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_adjective(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -241,7 +235,7 @@ fn r_adjective(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.bra = env.cursor;
     env.slice_del();
-    return true
+    return true;
 }
 
 fn r_adjectival(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -278,16 +272,19 @@ fn r_adjectival(env: &mut SnowballEnv, context: &mut Context) -> bool {
             2 => {
                 env.slice_del();
             }
-            _ => ()
+            _ => (),
         }
         break 'lab0;
     }
-    return true
+    return true;
 }
 
 fn r_reflexive(env: &mut SnowballEnv, context: &mut Context) -> bool {
     env.ket = env.cursor;
-    if (env.cursor - 3 <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 140 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 143 as u8)) {
+    if (env.cursor - 3 <= env.limit_backward
+        || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 140 as u8
+            && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 143 as u8))
+    {
         return false;
     }
 
@@ -296,7 +293,7 @@ fn r_reflexive(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.bra = env.cursor;
     env.slice_del();
-    return true
+    return true;
 }
 
 fn r_verb(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -326,9 +323,9 @@ fn r_verb(env: &mut SnowballEnv, context: &mut Context) -> bool {
         2 => {
             env.slice_del();
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_noun(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -338,12 +335,15 @@ fn r_noun(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.bra = env.cursor;
     env.slice_del();
-    return true
+    return true;
 }
 
 fn r_derivational(env: &mut SnowballEnv, context: &mut Context) -> bool {
     env.ket = env.cursor;
-    if (env.cursor - 5 <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 130 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 140 as u8)) {
+    if (env.cursor - 5 <= env.limit_backward
+        || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 130 as u8
+            && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 140 as u8))
+    {
         return false;
     }
 
@@ -355,7 +355,7 @@ fn r_derivational(env: &mut SnowballEnv, context: &mut Context) -> bool {
         return false;
     }
     env.slice_del();
-    return true
+    return true;
 }
 
 fn r_tidy_up(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -388,19 +388,16 @@ fn r_tidy_up(env: &mut SnowballEnv, context: &mut Context) -> bool {
         3 => {
             env.slice_del();
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 pub fn stem(env: &mut SnowballEnv) -> bool {
-    let mut context = &mut Context {
-        i_p2: 0,
-        i_pV: 0,
-    };
+    let mut context = &mut Context { i_p2: 0, i_pV: 0 };
     let v_1 = env.cursor;
     'lab0: loop {
-        'replab1: loop{
+        'replab1: loop {
             let v_2 = env.cursor;
             'lab2: for _ in 0..1 {
                 'golab3: loop {
@@ -501,5 +498,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
     env.cursor = env.limit - v_11;
     env.limit_backward = v_4;
     env.cursor = env.limit_backward;
-    return true
+    return true;
 }

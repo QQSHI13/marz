@@ -3,7 +3,7 @@
 use crate::language::Language;
 use crate::languages::porter;
 use crate::token::Token;
-use crate::tokenizer::tokenize_with_separator;
+use crate::tokenizer::{is_word_char, tokenize_with_separator};
 
 /// English language configuration.
 #[derive(Debug, Clone, Default)]
@@ -23,7 +23,7 @@ impl Language for English {
     }
 
     fn is_stop_word(&self, term: &str) -> bool {
-        STOP_WORDS.contains(&term)
+        STOP_WORDS.binary_search(&term).is_ok()
     }
 
     fn stem(&self, term: &str) -> String {
@@ -37,10 +37,6 @@ impl Language for English {
     fn pipeline_labels(&self) -> Vec<&'static str> {
         vec!["trimmer", "stopWordFilter", "stemmer"]
     }
-}
-
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
 }
 
 /// English stop-word list from lunr.js.

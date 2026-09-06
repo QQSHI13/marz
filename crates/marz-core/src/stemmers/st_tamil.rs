@@ -5,8 +5,8 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
 struct Context {
@@ -150,7 +150,12 @@ static A_12: &'static [Among<Context>; 6] = &[
 
 static A_13: &'static [Among<Context>; 4] = &[
     Among("\u{0B95}\u{0BB3}\u{0BCD}", -1, 4, None),
-    Among("\u{0BC1}\u{0B99}\u{0BCD}\u{0B95}\u{0BB3}\u{0BCD}", 0, 1, None),
+    Among(
+        "\u{0BC1}\u{0B99}\u{0BCD}\u{0B95}\u{0BB3}\u{0BCD}",
+        0,
+        1,
+        None,
+    ),
     Among("\u{0B9F}\u{0BCD}\u{0B95}\u{0BB3}\u{0BCD}", 0, 3, None),
     Among("\u{0BB1}\u{0BCD}\u{0B95}\u{0BB3}\u{0BCD}", 0, 2, None),
 ];
@@ -179,22 +184,42 @@ static A_16: &'static [Among<Context>; 8] = &[
 
 static A_17: &'static [Among<Context>; 26] = &[
     Among("\u{0BAA}\u{0B9F}\u{0BCD}\u{0B9F}\u{0BC1}", -1, 3, None),
-    Among("\u{0BB5}\u{0BBF}\u{0B9F}\u{0BCD}\u{0B9F}\u{0BC1}", -1, 3, None),
+    Among(
+        "\u{0BB5}\u{0BBF}\u{0B9F}\u{0BCD}\u{0B9F}\u{0BC1}",
+        -1,
+        3,
+        None,
+    ),
     Among("\u{0BAA}\u{0B9F}\u{0BC1}", -1, 3, None),
     Among("\u{0BB5}\u{0BBF}\u{0B9F}\u{0BC1}", -1, 3, None),
-    Among("\u{0BAA}\u{0B9F}\u{0BCD}\u{0B9F}\u{0BA4}\u{0BC1}", -1, 3, None),
+    Among(
+        "\u{0BAA}\u{0B9F}\u{0BCD}\u{0B9F}\u{0BA4}\u{0BC1}",
+        -1,
+        3,
+        None,
+    ),
     Among("\u{0BC6}\u{0BA9}\u{0BCD}\u{0BB1}\u{0BC1}", -1, 1, None),
     Among("\u{0BC1}\u{0B9F}\u{0BC8}", -1, 1, None),
     Among("\u{0BBF}\u{0BB2}\u{0BCD}\u{0BB2}\u{0BC8}", -1, 1, None),
     Among("\u{0BC1}\u{0B9F}\u{0BA9}\u{0BCD}", -1, 1, None),
     Among("\u{0BC6}\u{0BA9}\u{0BC1}\u{0BAE}\u{0BCD}", -1, 1, None),
     Among("\u{0BBF}\u{0B9F}\u{0BAE}\u{0BCD}", -1, 1, None),
-    Among("\u{0BC6}\u{0BB2}\u{0BCD}\u{0BB2}\u{0BBE}\u{0BAE}\u{0BCD}", -1, 3, None),
+    Among(
+        "\u{0BC6}\u{0BB2}\u{0BCD}\u{0BB2}\u{0BBE}\u{0BAE}\u{0BCD}",
+        -1,
+        3,
+        None,
+    ),
     Among("\u{0BAA}\u{0B9F}\u{0BCD}\u{0B9F}", -1, 3, None),
     Among("\u{0BAA}\u{0B9F}\u{0BCD}\u{0B9F}\u{0BA3}", -1, 3, None),
     Among("\u{0BC6}\u{0BA9}", -1, 1, None),
     Among("\u{0BA4}\u{0BBE}\u{0BA9}", -1, 3, None),
-    Among("\u{0BAA}\u{0B9F}\u{0BBF}\u{0BA4}\u{0BBE}\u{0BA9}", 15, 3, None),
+    Among(
+        "\u{0BAA}\u{0B9F}\u{0BBF}\u{0BA4}\u{0BBE}\u{0BA9}",
+        15,
+        3,
+        None,
+    ),
     Among("\u{0BC1}\u{0B9F}\u{0BC8}\u{0BAF}", -1, 1, None),
     Among("\u{0BBE}\u{0B95}\u{0BBF}\u{0BAF}", -1, 1, None),
     Among("\u{0B95}\u{0BC1}\u{0BB0}\u{0BBF}\u{0BAF}", -1, 3, None),
@@ -233,7 +258,12 @@ static A_20: &'static [Among<Context>; 22] = &[
     Among("\u{0BCA}\u{0B9F}\u{0BC1}", -1, 2, None),
     Among("\u{0BCB}\u{0B9F}\u{0BC1}", -1, 2, None),
     Among("\u{0BA4}\u{0BC1}", -1, 6, None),
-    Among("\u{0BBF}\u{0BB0}\u{0BC1}\u{0BA8}\u{0BCD}\u{0BA4}\u{0BC1}", 3, 2, None),
+    Among(
+        "\u{0BBF}\u{0BB0}\u{0BC1}\u{0BA8}\u{0BCD}\u{0BA4}\u{0BC1}",
+        3,
+        2,
+        None,
+    ),
     Among("\u{0BBF}\u{0BA9}\u{0BCD}\u{0BB1}\u{0BC1}", -1, 2, None),
     Among("\u{0BC1}\u{0B9F}\u{0BC8}", -1, 2, None),
     Among("\u{0BA9}\u{0BC8}", -1, 1, None),
@@ -331,7 +361,12 @@ static A_25: &'static [Among<Context>; 46] = &[
     Among("\u{0BBE}\u{0BB0}\u{0BCD}", -1, 5, None),
     Among("\u{0BA9}\u{0BBE}\u{0BB0}\u{0BCD}", 30, 1, None),
     Among("\u{0BAE}\u{0BBE}\u{0BB0}\u{0BCD}", 30, 1, None),
-    Among("\u{0B95}\u{0BCA}\u{0BA3}\u{0BCD}\u{0B9F}\u{0BBF}\u{0BB0}\u{0BCD}", -1, 1, None),
+    Among(
+        "\u{0B95}\u{0BCA}\u{0BA3}\u{0BCD}\u{0B9F}\u{0BBF}\u{0BB0}\u{0BCD}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0BA9}\u{0BBF}\u{0BB0}\u{0BCD}", -1, 5, None),
     Among("\u{0BA9}\u{0BB3}\u{0BCD}", -1, 1, None),
     Among("\u{0BAA}\u{0BB3}\u{0BCD}", -1, 1, None),
@@ -347,22 +382,41 @@ static A_25: &'static [Among<Context>; 46] = &[
 ];
 
 static A_26: &'static [Among<Context>; 6] = &[
-    Among("\u{0B95}\u{0BBF}\u{0BA9}\u{0BCD}\u{0BB1}\u{0BCD}", -1, -1, None),
-    Among("\u{0BBE}\u{0BA8}\u{0BBF}\u{0BA9}\u{0BCD}\u{0BB1}\u{0BCD}", -1, -1, None),
+    Among(
+        "\u{0B95}\u{0BBF}\u{0BA9}\u{0BCD}\u{0BB1}\u{0BCD}",
+        -1,
+        -1,
+        None,
+    ),
+    Among(
+        "\u{0BBE}\u{0BA8}\u{0BBF}\u{0BA9}\u{0BCD}\u{0BB1}\u{0BCD}",
+        -1,
+        -1,
+        None,
+    ),
     Among("\u{0B95}\u{0BBF}\u{0BB1}\u{0BCD}", -1, -1, None),
     Among("\u{0B95}\u{0BBF}\u{0BA9}\u{0BCD}\u{0BB1}", -1, -1, None),
-    Among("\u{0BBE}\u{0BA8}\u{0BBF}\u{0BA9}\u{0BCD}\u{0BB1}", -1, -1, None),
+    Among(
+        "\u{0BBE}\u{0BA8}\u{0BBF}\u{0BA9}\u{0BCD}\u{0BB1}",
+        -1,
+        -1,
+        None,
+    ),
     Among("\u{0B95}\u{0BBF}\u{0BB1}", -1, -1, None),
 ];
 
 fn r_has_min_length(env: &mut SnowballEnv, context: &mut Context) -> bool {
-    return (env.current.chars().count() as i32) > 4
+    return (env.current.chars().count() as i32) > 4;
 }
 
 fn r_fix_va_start(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
     env.bra = env.cursor;
-    if (env.cursor + 5 >= env.limit || env.current.as_bytes()[(env.cursor + 5) as usize] as u8 >> 5 != 4 as u8 || ((3078 as i32 >> (env.current.as_bytes()[(env.cursor + 5) as usize] as u8 & 0x1f)) & 1) == 0) {
+    if (env.cursor + 5 >= env.limit
+        || env.current.as_bytes()[(env.cursor + 5) as usize] as u8 >> 5 != 4 as u8
+        || ((3078 as i32 >> (env.current.as_bytes()[(env.cursor + 5) as usize] as u8 & 0x1f)) & 1)
+            == 0)
+    {
         return false;
     }
 
@@ -384,15 +438,15 @@ fn r_fix_va_start(env: &mut SnowballEnv, context: &mut Context) -> bool {
         4 => {
             env.slice_from("\u{0B8A}");
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_fix_endings(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let v_1 = env.cursor;
     'lab0: loop {
-        'replab1: loop{
+        'replab1: loop {
             let v_2 = env.cursor;
             'lab2: for _ in 0..1 {
                 if !r_fix_ending(env, context) {
@@ -406,7 +460,7 @@ fn r_fix_endings(env: &mut SnowballEnv, context: &mut Context) -> bool {
         break 'lab0;
     }
     env.cursor = v_1;
-    return true
+    return true;
 }
 
 fn r_remove_question_prefixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -425,7 +479,7 @@ fn r_remove_question_prefixes(env: &mut SnowballEnv, context: &mut Context) -> b
     let v_1 = env.cursor;
     r_fix_va_start(env, context);
     env.cursor = v_1;
-    return true
+    return true;
 }
 
 fn r_fix_ending(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -492,8 +546,13 @@ fn r_fix_ending(env: &mut SnowballEnv, context: &mut Context) -> bool {
                     env.slice_del();
                 }
                 9 => {
-                    if (env.cursor - 2 <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 136 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 141 as u8)) {among_var = 2;}
-                    else {
+                    if (env.cursor - 2 <= env.limit_backward
+                        || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 136 as u8
+                            && env.current.as_bytes()[(env.cursor - 1) as usize] as u8
+                                != 141 as u8))
+                    {
+                        among_var = 2;
+                    } else {
                         among_var = env.find_among_b(A_4, context);
                     }
                     match among_var {
@@ -503,10 +562,10 @@ fn r_fix_ending(env: &mut SnowballEnv, context: &mut Context) -> bool {
                         2 => {
                             env.slice_from("\u{0BAE}\u{0BCD}");
                         }
-                        _ => ()
+                        _ => (),
                     }
                 }
-                _ => ()
+                _ => (),
             }
             break 'lab0;
         }
@@ -562,12 +621,16 @@ fn r_fix_ending(env: &mut SnowballEnv, context: &mut Context) -> bool {
         break 'lab0;
     }
     env.cursor = env.limit_backward;
-    return true
+    return true;
 }
 
 fn r_remove_pronoun_prefixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
     env.bra = env.cursor;
-    if (env.cursor + 2 >= env.limit || env.current.as_bytes()[(env.cursor + 2) as usize] as u8 >> 5 != 4 as u8 || ((672 as i32 >> (env.current.as_bytes()[(env.cursor + 2) as usize] as u8 & 0x1f)) & 1) == 0) {
+    if (env.cursor + 2 >= env.limit
+        || env.current.as_bytes()[(env.cursor + 2) as usize] as u8 >> 5 != 4 as u8
+        || ((672 as i32 >> (env.current.as_bytes()[(env.cursor + 2) as usize] as u8 & 0x1f)) & 1)
+            == 0)
+    {
         return false;
     }
 
@@ -585,7 +648,7 @@ fn r_remove_pronoun_prefixes(env: &mut SnowballEnv, context: &mut Context) -> bo
     let v_1 = env.cursor;
     r_fix_va_start(env, context);
     env.cursor = v_1;
-    return true
+    return true;
 }
 
 fn r_remove_plural_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -593,7 +656,9 @@ fn r_remove_plural_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool 
     env.limit_backward = env.cursor;
     env.cursor = env.limit;
     env.ket = env.cursor;
-    if (env.cursor - 8 <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 141 as u8) {
+    if (env.cursor - 8 <= env.limit_backward
+        || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 141 as u8)
+    {
         return false;
     }
 
@@ -603,21 +668,19 @@ fn r_remove_plural_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool 
     }
     env.bra = env.cursor;
     match among_var {
-        1 => {
-            'lab0: loop {
-                let v_1 = env.limit - env.cursor;
-                'lab1: loop {
-                    if env.find_among_b(A_12, context) == 0 {
-                        break 'lab1;
-                    }
-                    env.slice_from("\u{0BC1}\u{0B99}\u{0BCD}");
-                    break 'lab0;
+        1 => 'lab0: loop {
+            let v_1 = env.limit - env.cursor;
+            'lab1: loop {
+                if env.find_among_b(A_12, context) == 0 {
+                    break 'lab1;
                 }
-                env.cursor = env.limit - v_1;
-                env.slice_from("\u{0BCD}");
+                env.slice_from("\u{0BC1}\u{0B99}\u{0BCD}");
                 break 'lab0;
             }
-        }
+            env.cursor = env.limit - v_1;
+            env.slice_from("\u{0BCD}");
+            break 'lab0;
+        },
         2 => {
             env.slice_from("\u{0BB2}\u{0BCD}");
         }
@@ -627,10 +690,10 @@ fn r_remove_plural_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool 
         4 => {
             env.slice_del();
         }
-        _ => ()
+        _ => (),
     }
     env.cursor = env.limit_backward;
-    return true
+    return true;
 }
 
 fn r_remove_question_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -652,7 +715,7 @@ fn r_remove_question_suffixes(env: &mut SnowballEnv, context: &mut Context) -> b
     env.cursor = env.limit - v_1;
     env.cursor = env.limit_backward;
     r_fix_endings(env, context);
-    return true
+    return true;
 }
 
 fn r_remove_command_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -662,7 +725,9 @@ fn r_remove_command_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bo
     env.limit_backward = env.cursor;
     env.cursor = env.limit;
     env.ket = env.cursor;
-    if (env.cursor - 5 <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 191 as u8) {
+    if (env.cursor - 5 <= env.limit_backward
+        || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 191 as u8)
+    {
         return false;
     }
 
@@ -672,7 +737,7 @@ fn r_remove_command_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bo
     env.bra = env.cursor;
     env.slice_del();
     env.cursor = env.limit_backward;
-    return true
+    return true;
 }
 
 fn r_remove_um(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -691,7 +756,7 @@ fn r_remove_um(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let v_1 = env.cursor;
     r_fix_ending(env, context);
     env.cursor = v_1;
-    return true
+    return true;
 }
 
 fn r_remove_common_word_endings(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -725,11 +790,11 @@ fn r_remove_common_word_endings(env: &mut SnowballEnv, context: &mut Context) ->
         3 => {
             env.slice_del();
         }
-        _ => ()
+        _ => (),
     }
     env.cursor = env.limit_backward;
     r_fix_endings(env, context);
-    return true
+    return true;
 }
 
 fn r_remove_vetrumai_urupukal(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -745,7 +810,13 @@ fn r_remove_vetrumai_urupukal(env: &mut SnowballEnv, context: &mut Context) -> b
         'lab1: loop {
             let v_2 = env.limit - env.cursor;
             env.ket = env.cursor;
-            if (env.cursor - 2 <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 4 as u8 || ((-2147475197 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f)) & 1) == 0) {
+            if (env.cursor - 2 <= env.limit_backward
+                || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 4 as u8
+                || ((-2147475197 as i32
+                    >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f))
+                    & 1)
+                    == 0)
+            {
                 break 'lab1;
             }
 
@@ -801,7 +872,7 @@ fn r_remove_vetrumai_urupukal(env: &mut SnowballEnv, context: &mut Context) -> b
                 7 => {
                     env.slice_from("\u{0BBF}");
                 }
-                _ => ()
+                _ => (),
             }
             env.cursor = env.limit - v_2;
             break 'lab0;
@@ -855,11 +926,11 @@ fn r_remove_vetrumai_urupukal(env: &mut SnowballEnv, context: &mut Context) -> b
     env.cursor = env.limit - v_9;
     env.cursor = env.limit_backward;
     r_fix_endings(env, context);
-    return true
+    return true;
 }
 
 fn r_remove_tense_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
-    'replab0: loop{
+    'replab0: loop {
         let v_1 = env.cursor;
         'lab1: for _ in 0..1 {
             if !r_remove_tense_suffix(env, context) {
@@ -870,12 +941,12 @@ fn r_remove_tense_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bool
         env.cursor = v_1;
         break 'replab0;
     }
-    return true
+    return true;
 }
 
 fn r_remove_tense_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
-    let mut b_found_a_match : bool;
+    let mut b_found_a_match: bool;
     b_found_a_match = false;
     if !r_has_min_length(env, context) {
         return false;
@@ -898,7 +969,13 @@ fn r_remove_tense_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool {
             2 => {
                 let v_3 = env.limit - env.cursor;
                 'lab1: loop {
-                    if (env.cursor - 2 <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 4 as u8 || ((1951712 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f)) & 1) == 0) {
+                    if (env.cursor - 2 <= env.limit_backward
+                        || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 4 as u8
+                        || ((1951712 as i32
+                            >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f))
+                            & 1)
+                            == 0)
+                    {
                         break 'lab1;
                     }
 
@@ -941,7 +1018,7 @@ fn r_remove_tense_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool {
                 env.cursor = env.limit - v_5;
                 env.slice_del();
             }
-            _ => ()
+            _ => (),
         }
         b_found_a_match = true;
         env.cursor = env.limit - v_2;
@@ -951,7 +1028,10 @@ fn r_remove_tense_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let v_6 = env.limit - env.cursor;
     'lab4: loop {
         env.ket = env.cursor;
-        if (env.cursor - 8 <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 141 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 177 as u8)) {
+        if (env.cursor - 8 <= env.limit_backward
+            || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 141 as u8
+                && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 177 as u8))
+        {
             break 'lab4;
         }
 
@@ -1005,5 +1085,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
     let v_9 = env.cursor;
     r_remove_tense_suffixes(env, context);
     env.cursor = v_9;
-    return true
+    return true;
 }

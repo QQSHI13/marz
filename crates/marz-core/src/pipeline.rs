@@ -64,6 +64,9 @@ impl Pipeline {
             if !self.language.trim(&mut token) {
                 continue;
             }
+            if self.language.is_stop_word(&token.term) {
+                continue;
+            }
             token.term = self.language.stem(&token.term);
             output.push(token);
         }

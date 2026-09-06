@@ -36,9 +36,10 @@ that has to be right about Japanese. Either way a browser downloads it before
 the first search.
 
 Marz tokenizes CJK into **overlapping character bigrams** instead. `検索エンジン`
-becomes `検索`, `索エ`, `エン`, `ンジ`, `ジン` — on both sides, so a query
-matches whatever a document contains without either side knowing where words
-begin. Nothing to download, nothing to be wrong about.
+becomes `検索`, `エン`, `ンジ`, `ジン` — no bigram crosses the Han/Katakana
+boundary (`索エ` would span two words), so a query matches whatever a document
+contains without either side knowing where words begin. Nothing to download,
+nothing to be wrong about.
 
 Bigrams alone over-match: a document containing 検索 and エンジン separately
 matches a query for 検索エンジン. So Marz records term positions and verifies
@@ -54,8 +55,10 @@ on a language that does not need them would only cost index size.
 
 ## Numbers
 
-Measured on this machine, on a synthetic corpus of 5,000 documents with a title
-and a body. Reproduce with `just size` and `cargo bench`.
+Measured on the reference machine, on a synthetic corpus of 5,000 documents
+with a title and a body. Reproduce with `just size` and `cargo bench`. Numbers
+are illustrative (toolchain and corpus dependent) and not pinned by CI — see
+`crates/marz-core/benches/`.
 
 | | English | Japanese |
 |---|---|---|
@@ -77,10 +80,14 @@ entire corpus is the actual work being asked for. Japanese is ~24 ms for a
 single bigram and ~40 ms for a five-character phrase, where the extra time is
 adjacency verification over positions. Reproduce with `cargo bench -- search`.
 
-WebAssembly, after `wasm-opt`: **175 KB raw, 84 KB gzipped**. That is the whole
-search engine including all four languages. The optional client-side index
-builder adds 39 KB and is behind a feature flag, because a site that builds its
-index in Python does not need it in the browser.
+WebAssembly, after `wasm-opt`: measure with `just size` (CI enforces a ceiling).
+The original four-language build was **175 KB raw, 84 KB gzipped**; the current
+full build ships 40+ languages (37 Snowball stemmers at ~2.9 KB gzipped each,
+plus Thai/Lao/Khmer/Burmese/Tibetan cluster bigrammers). A single-language
+build trims back to ~87 KB gzipped (`scripts/build-wasm.sh --no-default-features
+--features de`). The optional client-side index builder adds ~39 KB and is
+behind a feature flag, because a site that builds its index in Python does not
+need it in the browser.
 
 ## Dependencies
 
@@ -97,6 +104,12 @@ regex-based, which is what keeps it out of the WASM bundle.
 | `zh` | Han bigrams | none |
 | `ja` | Han/Kana bigrams | none |
 | `ko` | whitespace | none |
+| `th`, `lo`, `km`, `my`, `bo` | cluster bigrams (Thai, Lao, Khmer, Myanmar, Tibetan) | none |
+| 37× Snowball (`de`, `fr`, `ru`, …) | whitespace + punctuation | Snowball |
+| anything else (`vi`, `he`, `uk`, …) | whitespace + punctuation (generic fallback, warns) | none |
+
+Call `marz.languages()` / `languages()` for the exact list this build ships;
+trimmed WASM builds advertise fewer codes by design.
 
 A single index can serve several languages at once via `MultiLanguage`, which
 dispatches per script — one index for a site with translated pages, rather than

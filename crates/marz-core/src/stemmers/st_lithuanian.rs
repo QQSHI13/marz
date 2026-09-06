@@ -5,8 +5,8 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
 struct Context {
@@ -288,12 +288,12 @@ static A_2: &'static [Among<Context>; 11] = &[
     Among("esiu", -1, 4, None),
 ];
 
-static A_3: &'static [Among<Context>; 2] = &[
-    Among("č", -1, 1, None),
-    Among("dž", -1, 2, None),
-];
+static A_3: &'static [Among<Context>; 2] = &[Among("č", -1, 1, None), Among("dž", -1, 2, None)];
 
-static G_v: &'static [u8; 35] = &[17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 64, 1, 0, 64, 0, 0, 0, 0, 0, 0, 0, 4, 4];
+static G_v: &'static [u8; 35] = &[
+    17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 64, 1, 0, 64, 0, 0, 0, 0,
+    0, 0, 0, 4, 4,
+];
 
 fn r_step1(env: &mut SnowballEnv, context: &mut Context) -> bool {
     if env.cursor < context.i_p1 {
@@ -309,11 +309,11 @@ fn r_step1(env: &mut SnowballEnv, context: &mut Context) -> bool {
     env.bra = env.cursor;
     env.limit_backward = v_1;
     env.slice_del();
-    return true
+    return true;
 }
 
 fn r_step2(env: &mut SnowballEnv, context: &mut Context) -> bool {
-    'replab0: loop{
+    'replab0: loop {
         let v_1 = env.limit - env.cursor;
         'lab1: for _ in 0..1 {
             if env.cursor < context.i_p1 {
@@ -334,13 +334,18 @@ fn r_step2(env: &mut SnowballEnv, context: &mut Context) -> bool {
         env.cursor = env.limit - v_1;
         break 'replab0;
     }
-    return true
+    return true;
 }
 
 fn r_fix_conflicts(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
     env.ket = env.cursor;
-    if (env.cursor - 3 <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 3 as u8 || ((2621472 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f)) & 1) == 0) {
+    if (env.cursor - 3 <= env.limit_backward
+        || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 3 as u8
+        || ((2621472 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f))
+            & 1)
+            == 0)
+    {
         return false;
     }
 
@@ -374,15 +379,18 @@ fn r_fix_conflicts(env: &mut SnowballEnv, context: &mut Context) -> bool {
         8 => {
             env.slice_from("okatė");
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_fix_chdz(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
     env.ket = env.cursor;
-    if (env.cursor - 1 <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 141 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 190 as u8)) {
+    if (env.cursor - 1 <= env.limit_backward
+        || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 141 as u8
+            && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 190 as u8))
+    {
         return false;
     }
 
@@ -398,9 +406,9 @@ fn r_fix_chdz(env: &mut SnowballEnv, context: &mut Context) -> bool {
         2 => {
             env.slice_from("d");
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_fix_gd(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -410,13 +418,11 @@ fn r_fix_gd(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.bra = env.cursor;
     env.slice_from("g");
-    return true
+    return true;
 }
 
 pub fn stem(env: &mut SnowballEnv) -> bool {
-    let mut context = &mut Context {
-        i_p1: 0,
-    };
+    let mut context = &mut Context { i_p1: 0 };
     context.i_p1 = env.limit;
     let v_1 = env.cursor;
     'lab0: loop {
@@ -471,5 +477,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
     env.bra = env.cursor;
     env.slice_del();
     env.cursor = env.limit_backward;
-    return true
+    return true;
 }

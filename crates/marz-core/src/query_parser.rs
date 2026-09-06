@@ -6,10 +6,16 @@
 //! * `+term` — required term
 //! * `-term` — prohibited term
 //! * `field:term` — field-scoped term
-//! * `term^N` — boost
+//! * `term^N` — boost (float, e.g. `^2.5`)
 //! * `term~N` — fuzzy edit distance
 //! * backslash escaping for special characters
+//!
+//! `start`/`end` on [`QueryParseError`] and lexemes are **character** offsets
+//! into the query string, not byte offsets: slicing `query.as_bytes()` with
+//! them panics on multibyte input. Slice with `query.chars()` or convert via
+//! `char_indices`.
 
+use crate::normalize::normalize;
 use crate::query::{Clause, Presence, Query};
 
 /// Error produced when a query string cannot be parsed.
@@ -91,13 +97,23 @@ impl<'a> QueryLexer<'a> {
     fn slice_string(&mut self) -> String {
         let mut sub_slices: Vec<char> = Vec::new();
         let mut slice_start = self.start;
-        let slice_end = self.pos;
+        // `pos` never exceeds `chars.len()` — see `escape_character` — but clamp
+        // defensively so a future lexer state cannot panic on a multibyte query.
+        let slice_end = self.pos.min(self.chars.len());
+        let slice_start_clamped = slice_start.min(slice_end);
 
         for &escape_pos in &self.escape_positions {
+            if escape_pos < slice_start_clamped || escape_pos >= slice_end {
+                continue;
+            }
             sub_slices.extend(self.chars[slice_start..escape_pos].iter().copied());
             slice_start = escape_pos + 1;
         }
-        sub_slices.extend(self.chars[slice_start..slice_end].iter().copied());
+        sub_slices.extend(
+            self.chars[slice_start.min(slice_end)..slice_end]
+                .iter()
+                .copied(),
+        );
         self.escape_positions.clear();
 
         sub_slices.into_iter().collect()
@@ -115,6 +131,12 @@ impl<'a> QueryLexer<'a> {
     }
 
     fn escape_character(&mut self) {
+        // `pos` is already past the `\` (see `next`). If it is at the end there
+        // is no escaped character: keep the trailing `\` as a literal instead
+        // of advancing past the buffer and panicking in `slice_string`.
+        if self.pos >= self.chars.len() {
+            return;
+        }
         self.escape_positions.push(self.pos - 1);
         self.pos += 1;
     }
@@ -150,6 +172,24 @@ impl<'a> QueryLexer<'a> {
                 self.backup();
                 break;
             }
+        }
+    }
+
+    fn accept_number_run(&mut self) {
+        // Boosts are floats (`term^2.5`), not just integers. Accept digits and
+        // at most one `.`; the final `parse::<f64>` still rejects garbage like
+        // `^..` with a proper `QueryParseError` instead of silently lexing `^2`.
+        let mut seen_dot = false;
+        while let Some(ch) = self.next() {
+            if ch.is_ascii_digit() {
+                continue;
+            }
+            if ch == '.' && !seen_dot {
+                seen_dot = true;
+                continue;
+            }
+            self.backup();
+            break;
         }
     }
 
@@ -233,7 +273,7 @@ impl<'a> QueryLexer<'a> {
 
     fn lex_boost(&mut self) -> Option<LexState> {
         self.ignore();
-        self.accept_digit_run();
+        self.accept_number_run();
         self.emit(LexemeType::Boost);
         Some(LexState::Text)
     }
@@ -417,17 +457,17 @@ impl<'a> QueryParser<'a> {
                 end: 0,
             })?;
 
-        self.current_clause.term = lexeme.str.to_lowercase();
-        if self.current_clause.term.contains('*') {
-            self.current_clause.use_pipeline = false;
-        }
+        // Normalize (width-fold + lowercase) so `ＲＵＳＴ*` and `ｶﾞｲﾄﾞ*` match
+        // what the indexer stored. `normalize` leaves `*` untouched, so wildcard
+        // patterns survive. `use_pipeline` is set centrally in
+        // `Query::clause` (wildcard disables the pipeline); do not duplicate it
+        // here.
+        self.current_clause.term = normalize(&lexeme.str);
 
-        let next = self.peek_lexeme();
-        if next.is_none() {
+        let Some(next) = self.peek_lexeme() else {
             self.next_clause();
             return Ok(None);
-        }
-        let next = next.unwrap();
+        };
 
         match next.type_ {
             LexemeType::Term => {
@@ -463,12 +503,10 @@ impl<'a> QueryParser<'a> {
             .map_err(|_| self.error("edit distance must be numeric", &lexeme))?;
         self.current_clause.edit_distance = Some(distance);
 
-        let next = self.peek_lexeme();
-        if next.is_none() {
+        let Some(next) = self.peek_lexeme() else {
             self.next_clause();
             return Ok(None);
-        }
-        let next = next.unwrap();
+        };
 
         match next.type_ {
             LexemeType::Term => {
@@ -504,12 +542,10 @@ impl<'a> QueryParser<'a> {
             .map_err(|_| self.error("boost must be numeric", &lexeme))?;
         self.current_clause.boost = boost;
 
-        let next = self.peek_lexeme();
-        if next.is_none() {
+        let Some(next) = self.peek_lexeme() else {
             self.next_clause();
             return Ok(None);
-        }
-        let next = next.unwrap();
+        };
 
         match next.type_ {
             LexemeType::Term => {

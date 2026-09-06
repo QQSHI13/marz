@@ -5,8 +5,8 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
 struct Context {
@@ -44,41 +44,111 @@ static A_2: &'static [Among<Context>; 4] = &[
 static A_3: &'static [Among<Context>; 33] = &[
     Among("\u{06AF}\u{06CC}\u{0644}\u{0627}\u{0646}", -1, 1, None),
     Among("\u{0622}\u{0644}\u{0645}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{0645}\u{0633}\u{0644}\u{0645}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{0633}\u{0644}\u{06CC}\u{0645}\u{0627}\u{0646}", -1, 1, None),
+    Among(
+        "\u{0645}\u{0633}\u{0644}\u{0645}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
+    Among(
+        "\u{0633}\u{0644}\u{06CC}\u{0645}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0627}\u{06CC}\u{0645}\u{0627}\u{0646}", -1, 1, None),
     Among("\u{067E}\u{06CC}\u{0645}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{0633}\u{0627}\u{062E}\u{062A}\u{0645}\u{0627}\u{0646}", -1, 1, None),
+    Among(
+        "\u{0633}\u{0627}\u{062E}\u{062A}\u{0645}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0631}\u{0645}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{0642}\u{0647}\u{0631}\u{0645}\u{0627}\u{0646}", 7, 1, None),
+    Among(
+        "\u{0642}\u{0647}\u{0631}\u{0645}\u{0627}\u{0646}",
+        7,
+        1,
+        None,
+    ),
     Among("\u{06A9}\u{0631}\u{0645}\u{0627}\u{0646}", 7, 1, None),
     Among("\u{062F}\u{0631}\u{0645}\u{0627}\u{0646}", 7, 1, None),
-    Among("\u{0647}\u{0645}\u{0632}\u{0645}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{0633}\u{0627}\u{0632}\u{0645}\u{0627}\u{0646}", -1, 1, None),
+    Among(
+        "\u{0647}\u{0645}\u{0632}\u{0645}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
+    Among(
+        "\u{0633}\u{0627}\u{0632}\u{0645}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0622}\u{0633}\u{0645}\u{0627}\u{0646}", -1, 1, None),
     Among("\u{06CC}\u{0648}\u{0646}\u{0627}\u{0646}", -1, 1, None),
     Among("\u{0644}\u{0628}\u{0646}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{0627}\u{0635}\u{0641}\u{0647}\u{0627}\u{0646}", -1, 1, None),
+    Among(
+        "\u{0627}\u{0635}\u{0641}\u{0647}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{067E}\u{0627}\u{06CC}\u{0627}\u{0646}", -1, 1, None),
     Among("\u{0628}\u{06CC}\u{0627}\u{0646}", -1, 1, None),
     Among("\u{062C}\u{0631}\u{06CC}\u{0627}\u{0646}", -1, 1, None),
     Among("\u{0627}\u{0645}\u{06A9}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{0622}\u{0630}\u{0631}\u{0628}\u{0627}\u{06CC}\u{062C}\u{0627}\u{0646}", -1, 1, None),
+    Among(
+        "\u{0622}\u{0630}\u{0631}\u{0628}\u{0627}\u{06CC}\u{062C}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0647}\u{0645}\u{062F}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{062E}\u{0627}\u{0646}\u{062F}\u{0627}\u{0646}", -1, 1, None),
+    Among(
+        "\u{062E}\u{0627}\u{0646}\u{062F}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0632}\u{0646}\u{062F}\u{0627}\u{0646}", -1, 1, None),
     Among("\u{0645}\u{06CC}\u{0632}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{0622}\u{062A}\u{0634}\u{0641}\u{0634}\u{0627}\u{0646}", -1, 1, None),
+    Among(
+        "\u{0622}\u{062A}\u{0634}\u{0641}\u{0634}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0646}\u{0634}\u{0627}\u{0646}", -1, 1, None),
     Among("\u{0627}\u{06CC}\u{0634}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{067E}\u{0631}\u{06CC}\u{0634}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{06A9}\u{0647}\u{06A9}\u{0634}\u{0627}\u{0646}", -1, 1, None),
-    Among("\u{062F}\u{0631}\u{062E}\u{0634}\u{0627}\u{0646}", -1, 1, None),
+    Among(
+        "\u{067E}\u{0631}\u{06CC}\u{0634}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
+    Among(
+        "\u{06A9}\u{0647}\u{06A9}\u{0634}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
+    Among(
+        "\u{062F}\u{0631}\u{062E}\u{0634}\u{0627}\u{0646}",
+        -1,
+        1,
+        None,
+    ),
     Among("\u{0633}\u{0644}\u{0637}\u{0627}\u{0646}", -1, 1, None),
 ];
 
 static A_4: &'static [Among<Context>; 2] = &[
-    Among("\u{0627}\u{0633}\u{0627}\u{062A}\u{06CC}\u{062F}", -1, 2, None),
+    Among(
+        "\u{0627}\u{0633}\u{0627}\u{062A}\u{06CC}\u{062F}",
+        -1,
+        2,
+        None,
+    ),
     Among("\u{0627}\u{062E}\u{0628}\u{0627}\u{0631}", -1, 1, None),
 ];
 
@@ -131,14 +201,19 @@ static A_7: &'static [Among<Context>; 15] = &[
     Among("\u{0631}\u{0641}\u{062A}\u{06CC}", -1, 2, None),
     Among("\u{062F}", -1, 1, None),
     Among("\u{0627}\u{0646}\u{062F}", 10, 1, None),
-    Among("\u{0631}\u{0641}\u{062A}\u{0627}\u{0646}\u{062F}", 11, 2, None),
+    Among(
+        "\u{0631}\u{0641}\u{062A}\u{0627}\u{0646}\u{062F}",
+        11,
+        2,
+        None,
+    ),
     Among("\u{06CC}\u{062F}", 10, 1, None),
     Among("\u{0631}\u{0641}\u{062A}\u{06CC}\u{062F}", 13, 2, None),
 ];
 
 fn r_Normalize_Characters(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
-    'replab0: loop{
+    'replab0: loop {
         let v_1 = env.cursor;
         'lab1: for _ in 0..1 {
             env.bra = env.cursor;
@@ -169,20 +244,23 @@ fn r_Normalize_Characters(env: &mut SnowballEnv, context: &mut Context) -> bool 
                     }
                     env.next_char();
                 }
-                _ => ()
+                _ => (),
             }
             continue 'replab0;
         }
         env.cursor = v_1;
         break 'replab0;
     }
-    return true
+    return true;
 }
 
 fn r_Prefixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
     env.bra = env.cursor;
-    if (env.cursor + 6 >= env.limit || (env.current.as_bytes()[(env.cursor + 6) as usize] as u8 != 140 as u8 && env.current.as_bytes()[(env.cursor + 6) as usize] as u8 != 226 as u8)) {
+    if (env.cursor + 6 >= env.limit
+        || (env.current.as_bytes()[(env.cursor + 6) as usize] as u8 != 140 as u8
+            && env.current.as_bytes()[(env.cursor + 6) as usize] as u8 != 226 as u8))
+    {
         return false;
     }
 
@@ -205,13 +283,13 @@ fn r_Prefixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
             env.slice_del();
             context.b_saw_present_prefix = true;
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_Delete_ZWNJ(env: &mut SnowballEnv, context: &mut Context) -> bool {
-    'replab0: loop{
+    'replab0: loop {
         let v_1 = env.cursor;
         'lab1: for _ in 0..1 {
             'golab2: loop {
@@ -237,11 +315,11 @@ fn r_Delete_ZWNJ(env: &mut SnowballEnv, context: &mut Context) -> bool {
         env.cursor = v_1;
         break 'replab0;
     }
-    return true
+    return true;
 }
 
 fn r_R1(env: &mut SnowballEnv, context: &mut Context) -> bool {
-    return context.i_p1 <= env.cursor
+    return context.i_p1 <= env.cursor;
 }
 
 fn r_Protect_Lexical_AN(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -255,7 +333,9 @@ fn r_Protect_Lexical_AN(env: &mut SnowballEnv, context: &mut Context) -> bool {
     env.cursor = env.limit - v_1;
     let v_2 = env.limit - env.cursor;
     'lab1: loop {
-        if (env.cursor - 5 <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 134 as u8) {
+        if (env.cursor - 5 <= env.limit_backward
+            || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 134 as u8)
+        {
             break 'lab1;
         }
 
@@ -265,11 +345,13 @@ fn r_Protect_Lexical_AN(env: &mut SnowballEnv, context: &mut Context) -> bool {
         return false;
     }
     env.cursor = env.limit - v_2;
-    return true
+    return true;
 }
 
 fn r_AN_Exception(env: &mut SnowballEnv, context: &mut Context) -> bool {
-    if (env.cursor - 7 <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 134 as u8) {
+    if (env.cursor - 7 <= env.limit_backward
+        || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 134 as u8)
+    {
         return false;
     }
 
@@ -279,13 +361,16 @@ fn r_AN_Exception(env: &mut SnowballEnv, context: &mut Context) -> bool {
     if env.cursor > env.limit_backward {
         return false;
     }
-    return true
+    return true;
 }
 
 fn r_Irregular_Noun(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
     env.ket = env.cursor;
-    if (env.cursor - 9 <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 175 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 177 as u8)) {
+    if (env.cursor - 9 <= env.limit_backward
+        || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 175 as u8
+            && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 177 as u8))
+    {
         return false;
     }
 
@@ -301,9 +386,9 @@ fn r_Irregular_Noun(env: &mut SnowballEnv, context: &mut Context) -> bool {
         2 => {
             env.slice_from("\u{0627}\u{0633}\u{062A}\u{0627}\u{062F}");
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_Stem_Noun_or_Adjective(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -340,12 +425,12 @@ fn r_Stem_Noun_or_Adjective(env: &mut SnowballEnv, context: &mut Context) -> boo
                 }
                 env.slice_del();
             }
-            _ => ()
+            _ => (),
         }
         env.limit_backward = v_2;
         break 'lab0;
     }
-    return true
+    return true;
 }
 
 fn r_Stem_Verb(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -405,11 +490,11 @@ fn r_Stem_Verb(env: &mut SnowballEnv, context: &mut Context) -> bool {
                 env.slice_from("\u{062A}");
                 context.b_remove_verb_person_endings = true;
             }
-            _ => ()
+            _ => (),
         }
         break 'lab0;
     }
-    return true
+    return true;
 }
 
 pub fn stem(env: &mut SnowballEnv) -> bool {
@@ -440,7 +525,7 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
     env.cursor = v_4;
     env.limit_backward = env.cursor;
     env.cursor = env.limit;
-    'replab1: loop{
+    'replab1: loop {
         let v_5 = env.limit - env.cursor;
         'lab2: for _ in 0..1 {
             let v_6 = env.limit - env.cursor;
@@ -476,5 +561,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
         break 'replab1;
     }
     env.cursor = env.limit_backward;
-    return true
+    return true;
 }

@@ -5,12 +5,11 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
-struct Context {
-}
+struct Context {}
 
 static A_0: &'static [Among<Context>; 132] = &[
     Among("\u{0940}", -1, -1, None),
@@ -65,18 +64,38 @@ static A_0: &'static [Among<Context>; 132] = &[
     Among("\u{0906}\u{090F}\u{0902}", 47, -1, None),
     Among("\u{0909}\u{090F}\u{0902}", 47, -1, None),
     Among("\u{093E}\u{090F}\u{0902}", 47, -1, None),
-    Among("\u{0924}\u{093E}\u{090F}\u{0902}", 51, -1, Some(&r_CONSONANT)),
+    Among(
+        "\u{0924}\u{093E}\u{090F}\u{0902}",
+        51,
+        -1,
+        Some(&r_CONSONANT),
+    ),
     Among("\u{0905}\u{0924}\u{093E}\u{090F}\u{0902}", 52, -1, None),
-    Among("\u{0928}\u{093E}\u{090F}\u{0902}", 51, -1, Some(&r_CONSONANT)),
+    Among(
+        "\u{0928}\u{093E}\u{090F}\u{0902}",
+        51,
+        -1,
+        Some(&r_CONSONANT),
+    ),
     Among("\u{0905}\u{0928}\u{093E}\u{090F}\u{0902}", 54, -1, None),
     Among("\u{0913}\u{0902}", -1, -1, None),
     Among("\u{0941}\u{0913}\u{0902}", 56, -1, None),
     Among("\u{0906}\u{0913}\u{0902}", 56, -1, None),
     Among("\u{0909}\u{0913}\u{0902}", 56, -1, None),
     Among("\u{093E}\u{0913}\u{0902}", 56, -1, None),
-    Among("\u{0924}\u{093E}\u{0913}\u{0902}", 60, -1, Some(&r_CONSONANT)),
+    Among(
+        "\u{0924}\u{093E}\u{0913}\u{0902}",
+        60,
+        -1,
+        Some(&r_CONSONANT),
+    ),
     Among("\u{0905}\u{0924}\u{093E}\u{0913}\u{0902}", 61, -1, None),
-    Among("\u{0928}\u{093E}\u{0913}\u{0902}", 60, -1, Some(&r_CONSONANT)),
+    Among(
+        "\u{0928}\u{093E}\u{0913}\u{0902}",
+        60,
+        -1,
+        Some(&r_CONSONANT),
+    ),
     Among("\u{0905}\u{0928}\u{093E}\u{0913}\u{0902}", 63, -1, None),
     Among("\u{093E}\u{0902}", -1, -1, None),
     Among("\u{0907}\u{092F}\u{093E}\u{0902}", 65, -1, None),
@@ -154,8 +173,7 @@ fn r_CONSONANT(env: &mut SnowballEnv, context: &mut Context) -> bool {
 }
 
 pub fn stem(env: &mut SnowballEnv) -> bool {
-    let mut context = &mut Context {
-    };
+    let mut context = &mut Context {};
     if env.cursor >= env.limit {
         return false;
     }
@@ -169,5 +187,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
     env.bra = env.cursor;
     env.slice_del();
     env.cursor = env.limit_backward;
-    return true
+    return true;
 }

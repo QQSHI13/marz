@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::varint::{write_str, write_varint};
 use super::{FLAG_HAS_POSITIONS, FORMAT_VERSION, HEADER_LEN, MAGIC, TERMS_PER_BLOCK};
-use crate::index::{FieldRef, Posting};
+use crate::index::Posting;
 
 /// Everything the writer needs from a built index.
 ///
@@ -38,8 +38,8 @@ pub struct IndexSnapshot<'a> {
     pub document_count: usize,
     /// Per-document boosts. Missing entries default to `1.0`.
     pub doc_boosts: &'a HashMap<String, f64>,
-    /// Token count per document field.
-    pub field_lengths: &'a HashMap<FieldRef, usize>,
+    /// Token count per document field: `doc_ref -> field_name -> len`.
+    pub field_lengths: &'a HashMap<String, HashMap<String, usize>>,
     /// The inverted index, keyed by term in sorted order.
     pub inverted_index: &'a BTreeMap<String, Posting>,
     /// BM25 term-frequency saturation parameter.
@@ -93,10 +93,15 @@ pub fn write_index(snapshot: &IndexSnapshot<'_>) -> Vec<u8> {
         0
     };
     out.extend_from_slice(&flags.to_le_bytes());
-    out.extend_from_slice(&(doc_refs.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(snapshot.document_count as u32).to_le_bytes());
-    out.extend_from_slice(&(snapshot.fields.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(terms.len() as u32).to_le_bytes());
+    let doc_count_u32 = u32::try_from(doc_refs.len()).expect("doc count exceeds u32");
+    let document_count_u32 =
+        u32::try_from(snapshot.document_count).expect("document count exceeds u32");
+    let field_count_u32 = u32::try_from(snapshot.fields.len()).expect("field count exceeds u32");
+    let term_count_u32 = u32::try_from(terms.len()).expect("term count exceeds u32");
+    out.extend_from_slice(&doc_count_u32.to_le_bytes());
+    out.extend_from_slice(&document_count_u32.to_le_bytes());
+    out.extend_from_slice(&field_count_u32.to_le_bytes());
+    out.extend_from_slice(&term_count_u32.to_le_bytes());
     out.extend_from_slice(&snapshot.k1.to_le_bytes());
     out.extend_from_slice(&snapshot.b.to_le_bytes());
     for offset in [
@@ -129,8 +134,8 @@ pub fn write_index(snapshot: &IndexSnapshot<'_>) -> Vec<u8> {
 /// still be returned by a purely negated query.
 fn collect_doc_refs<'a>(snapshot: &IndexSnapshot<'a>) -> Vec<&'a str> {
     let mut refs: BTreeSet<&str> = BTreeSet::new();
-    for field_ref in snapshot.field_lengths.keys() {
-        refs.insert(field_ref.doc_ref());
+    for doc_ref in snapshot.field_lengths.keys() {
+        refs.insert(doc_ref.as_str());
     }
     for doc_ref in snapshot.doc_boosts.keys() {
         refs.insert(doc_ref.as_str());
@@ -196,14 +201,17 @@ fn build_docs(
     // needs random access to a single cell, so this stays fixed-width; varints
     // would be smaller but would force a scan from the start of the matrix.
     let mut lengths = vec![0u32; doc_refs.len() * field_count];
-    for (field_ref, length) in snapshot.field_lengths {
-        let Some(doc_id) = doc_refs.binary_search(&field_ref.doc_ref()).ok() else {
+    for (doc_ref, fields) in snapshot.field_lengths {
+        let Ok(doc_id) = doc_refs.binary_search(&doc_ref.as_str()) else {
             continue;
         };
-        let Some(field_id) = field_ids.get(field_ref.field_name()) else {
-            continue;
-        };
-        lengths[doc_id * field_count + *field_id as usize] = *length as u32;
+        for (field_name, length) in fields {
+            let Some(field_id) = field_ids.get(field_name.as_str()) else {
+                continue;
+            };
+            lengths[doc_id * field_count + *field_id as usize] =
+                u32::try_from(*length).expect("field length exceeds u32");
+        }
     }
     for length in &lengths {
         out.extend_from_slice(&length.to_le_bytes());
@@ -306,6 +314,18 @@ fn write_position_block(out: &mut Vec<u8>, positions: &[(usize, usize)]) {
     if positions.is_empty() {
         return;
     }
+    // Defensive sort: positions must ascend for delta coding. Unsorted input
+    // (e.g. a future tokenizer emitting out-of-order tokens) would otherwise be
+    // silently corrupted by `saturating_sub` into zeros. Sorting is cheap
+    // relative to I/O and makes the writer total.
+    let mut sorted: Vec<(usize, usize)> = positions.to_vec();
+    debug_assert!(
+        sorted.windows(2).all(|w| w[0].0 <= w[1].0),
+        "positions out of order: {positions:?}"
+    );
+    sorted.sort_unstable();
+    let positions = sorted.as_slice();
+
     let first_length = positions[0].1;
     let uniform = first_length != 0 && positions.iter().all(|(_, len)| *len == first_length);
 
@@ -424,7 +444,7 @@ mod tests {
         fields: Vec<String>,
         field_boosts: HashMap<String, f64>,
         doc_boosts: HashMap<String, f64>,
-        field_lengths: HashMap<FieldRef, usize>,
+        field_lengths: HashMap<String, HashMap<String, usize>>,
         inverted_index: BTreeMap<String, Posting>,
     }
 
@@ -467,10 +487,18 @@ mod tests {
                 .into_iter()
                 .collect(),
             field_lengths: [
-                (FieldRef::new("a", "title"), 3),
-                (FieldRef::new("a", "body"), 12),
-                (FieldRef::new("b", "title"), 4),
-                (FieldRef::new("b", "body"), 20),
+                (
+                    "a".to_string(),
+                    [("title".to_string(), 3), ("body".to_string(), 12)]
+                        .into_iter()
+                        .collect(),
+                ),
+                (
+                    "b".to_string(),
+                    [("title".to_string(), 4), ("body".to_string(), 20)]
+                        .into_iter()
+                        .collect(),
+                ),
             ]
             .into_iter()
             .collect(),

@@ -5,8 +5,8 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
 struct Context {
@@ -26,10 +26,7 @@ static A_1: &'static [Among<Context>; 3] = &[
     Among("mu", -1, 1, None),
 ];
 
-static A_2: &'static [Among<Context>; 2] = &[
-    Among("i", -1, 2, None),
-    Among("an", -1, 1, None),
-];
+static A_2: &'static [Among<Context>; 2] = &[Among("i", -1, 2, None), Among("an", -1, 1, None)];
 
 static A_3: &'static [Among<Context>; 10] = &[
     Among("di", -1, 1, None),
@@ -44,16 +41,16 @@ static A_3: &'static [Among<Context>; 10] = &[
     Among("ter", -1, 1, None),
 ];
 
-static A_4: &'static [Among<Context>; 2] = &[
-    Among("be", -1, 2, None),
-    Among("pe", -1, 1, None),
-];
+static A_4: &'static [Among<Context>; 2] = &[Among("be", -1, 2, None), Among("pe", -1, 1, None)];
 
 static G_vowel: &'static [u8; 3] = &[17, 65, 16];
 
 fn r_remove_particle(env: &mut SnowballEnv, context: &mut Context) -> bool {
     env.ket = env.cursor;
-    if (env.cursor - 2 <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 104 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 110 as u8)) {
+    if (env.cursor - 2 <= env.limit_backward
+        || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 104 as u8
+            && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 110 as u8))
+    {
         return false;
     }
 
@@ -63,12 +60,15 @@ fn r_remove_particle(env: &mut SnowballEnv, context: &mut Context) -> bool {
     env.bra = env.cursor;
     env.slice_del();
     context.i_measure -= 1;
-    return true
+    return true;
 }
 
 fn r_remove_possessive_pronoun(env: &mut SnowballEnv, context: &mut Context) -> bool {
     env.ket = env.cursor;
-    if (env.cursor - 1 <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 97 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 117 as u8)) {
+    if (env.cursor - 1 <= env.limit_backward
+        || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 97 as u8
+            && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 117 as u8))
+    {
         return false;
     }
 
@@ -78,13 +78,16 @@ fn r_remove_possessive_pronoun(env: &mut SnowballEnv, context: &mut Context) -> 
     env.bra = env.cursor;
     env.slice_del();
     context.i_measure -= 1;
-    return true
+    return true;
 }
 
 fn r_remove_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
     env.ket = env.cursor;
-    if (env.cursor <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 105 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 110 as u8)) {
+    if (env.cursor <= env.limit_backward
+        || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 105 as u8
+            && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 110 as u8))
+    {
         return false;
     }
 
@@ -94,29 +97,27 @@ fn r_remove_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.bra = env.cursor;
     match among_var {
-        1 => {
-            'lab0: loop {
-                let v_1 = env.limit - env.cursor;
-                'lab1: loop {
-                    if context.i_prefix == 3 {
-                        break 'lab1;
-                    }
-                    if context.i_prefix == 2 {
-                        break 'lab1;
-                    }
-                    if !env.eq_s_b(&"k") {
-                        break 'lab1;
-                    }
-                    env.bra = env.cursor;
-                    break 'lab0;
+        1 => 'lab0: loop {
+            let v_1 = env.limit - env.cursor;
+            'lab1: loop {
+                if context.i_prefix == 3 {
+                    break 'lab1;
                 }
-                env.cursor = env.limit - v_1;
-                if context.i_prefix == 1 {
-                    return false;
+                if context.i_prefix == 2 {
+                    break 'lab1;
                 }
+                if !env.eq_s_b(&"k") {
+                    break 'lab1;
+                }
+                env.bra = env.cursor;
                 break 'lab0;
             }
-        }
+            env.cursor = env.limit - v_1;
+            if context.i_prefix == 1 {
+                return false;
+            }
+            break 'lab0;
+        },
         2 => {
             if context.i_prefix > 2 {
                 return false;
@@ -128,17 +129,20 @@ fn r_remove_suffix(env: &mut SnowballEnv, context: &mut Context) -> bool {
                 return false;
             }
         }
-        _ => ()
+        _ => (),
     }
     env.slice_del();
     context.i_measure -= 1;
-    return true
+    return true;
 }
 
 fn r_remove_first_order_prefix(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
     env.bra = env.cursor;
-    if (env.cursor + 1 >= env.limit || (env.current.as_bytes()[(env.cursor + 1) as usize] as u8 != 105 as u8 && env.current.as_bytes()[(env.cursor + 1) as usize] as u8 != 101 as u8)) {
+    if (env.cursor + 1 >= env.limit
+        || (env.current.as_bytes()[(env.cursor + 1) as usize] as u8 != 105 as u8
+            && env.current.as_bytes()[(env.cursor + 1) as usize] as u8 != 101 as u8))
+    {
         return false;
     }
 
@@ -153,61 +157,57 @@ fn r_remove_first_order_prefix(env: &mut SnowballEnv, context: &mut Context) -> 
             context.i_prefix = 1;
             context.i_measure -= 1;
         }
-        2 => {
-            'lab0: loop {
-                let v_1 = env.cursor;
-                'lab1: loop {
-                    if !env.eq_s(&"y") {
-                        break 'lab1;
-                    }
-                    let v_2 = env.cursor;
-                    if !env.in_grouping(G_vowel, 97, 117) {
-                        break 'lab1;
-                    }
-                    env.cursor = v_2;
-                    env.ket = env.cursor;
-                    env.slice_from("s");
-                    context.i_prefix = 1;
-                    context.i_measure -= 1;
-                    break 'lab0;
+        2 => 'lab0: loop {
+            let v_1 = env.cursor;
+            'lab1: loop {
+                if !env.eq_s(&"y") {
+                    break 'lab1;
                 }
-                env.cursor = v_1;
-                env.slice_del();
+                let v_2 = env.cursor;
+                if !env.in_grouping(G_vowel, 97, 117) {
+                    break 'lab1;
+                }
+                env.cursor = v_2;
+                env.ket = env.cursor;
+                env.slice_from("s");
                 context.i_prefix = 1;
                 context.i_measure -= 1;
                 break 'lab0;
             }
-        }
+            env.cursor = v_1;
+            env.slice_del();
+            context.i_prefix = 1;
+            context.i_measure -= 1;
+            break 'lab0;
+        },
         3 => {
             env.slice_del();
             context.i_prefix = 3;
             context.i_measure -= 1;
         }
-        4 => {
-            'lab2: loop {
-                let v_3 = env.cursor;
-                'lab3: loop {
-                    if !env.eq_s(&"y") {
-                        break 'lab3;
-                    }
-                    let v_4 = env.cursor;
-                    if !env.in_grouping(G_vowel, 97, 117) {
-                        break 'lab3;
-                    }
-                    env.cursor = v_4;
-                    env.ket = env.cursor;
-                    env.slice_from("s");
-                    context.i_prefix = 3;
-                    context.i_measure -= 1;
-                    break 'lab2;
+        4 => 'lab2: loop {
+            let v_3 = env.cursor;
+            'lab3: loop {
+                if !env.eq_s(&"y") {
+                    break 'lab3;
                 }
-                env.cursor = v_3;
-                env.slice_del();
+                let v_4 = env.cursor;
+                if !env.in_grouping(G_vowel, 97, 117) {
+                    break 'lab3;
+                }
+                env.cursor = v_4;
+                env.ket = env.cursor;
+                env.slice_from("s");
                 context.i_prefix = 3;
                 context.i_measure -= 1;
                 break 'lab2;
             }
-        }
+            env.cursor = v_3;
+            env.slice_del();
+            context.i_prefix = 3;
+            context.i_measure -= 1;
+            break 'lab2;
+        },
         5 => {
             context.i_prefix = 1;
             context.i_measure -= 1;
@@ -246,15 +246,17 @@ fn r_remove_first_order_prefix(env: &mut SnowballEnv, context: &mut Context) -> 
                 break 'lab6;
             }
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 fn r_remove_second_order_prefix(env: &mut SnowballEnv, context: &mut Context) -> bool {
     let mut among_var;
     env.bra = env.cursor;
-    if (env.cursor + 1 >= env.limit || env.current.as_bytes()[(env.cursor + 1) as usize] as u8 != 101 as u8) {
+    if (env.cursor + 1 >= env.limit
+        || env.current.as_bytes()[(env.cursor + 1) as usize] as u8 != 101 as u8)
+    {
         return false;
     }
 
@@ -263,34 +265,32 @@ fn r_remove_second_order_prefix(env: &mut SnowballEnv, context: &mut Context) ->
         return false;
     }
     match among_var {
-        1 => {
-            'lab0: loop {
-                let v_1 = env.cursor;
-                'lab1: loop {
-                    if !env.eq_s(&"r") {
-                        break 'lab1;
-                    }
-                    env.ket = env.cursor;
-                    context.i_prefix = 2;
-                    break 'lab0;
+        1 => 'lab0: loop {
+            let v_1 = env.cursor;
+            'lab1: loop {
+                if !env.eq_s(&"r") {
+                    break 'lab1;
                 }
-                env.cursor = v_1;
-                'lab2: loop {
-                    if !env.eq_s(&"l") {
-                        break 'lab2;
-                    }
-                    env.ket = env.cursor;
-                    if !env.eq_s(&"ajar") {
-                        break 'lab2;
-                    }
-                    break 'lab0;
-                }
-                env.cursor = v_1;
                 env.ket = env.cursor;
                 context.i_prefix = 2;
                 break 'lab0;
             }
-        }
+            env.cursor = v_1;
+            'lab2: loop {
+                if !env.eq_s(&"l") {
+                    break 'lab2;
+                }
+                env.ket = env.cursor;
+                if !env.eq_s(&"ajar") {
+                    break 'lab2;
+                }
+                break 'lab0;
+            }
+            env.cursor = v_1;
+            env.ket = env.cursor;
+            context.i_prefix = 2;
+            break 'lab0;
+        },
         2 => {
             'lab3: loop {
                 let v_2 = env.cursor;
@@ -324,11 +324,11 @@ fn r_remove_second_order_prefix(env: &mut SnowballEnv, context: &mut Context) ->
             }
             context.i_prefix = 4;
         }
-        _ => ()
+        _ => (),
     }
     context.i_measure -= 1;
     env.slice_del();
-    return true
+    return true;
 }
 
 pub fn stem(env: &mut SnowballEnv) -> bool {
@@ -339,7 +339,7 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
     context.i_measure = 0;
     let v_1 = env.cursor;
     'lab0: loop {
-        'replab1: loop{
+        'replab1: loop {
             let v_2 = env.cursor;
             'lab2: for _ in 0..1 {
                 if !env.go_out_grouping(G_vowel, 97, 117) {
@@ -426,5 +426,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
         env.cursor = v_10;
         break 'lab3;
     }
-    return true
+    return true;
 }

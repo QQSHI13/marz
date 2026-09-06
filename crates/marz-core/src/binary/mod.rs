@@ -231,6 +231,13 @@ pub enum FormatError {
     InvalidFieldId(u32),
     /// A term id was outside `0..term_count`.
     InvalidTermId(u32),
+    /// An index was loaded with a language that does not match its header.
+    LanguageMismatch {
+        /// Language the caller requested.
+        expected: String,
+        /// Language the index was built with.
+        found: String,
+    },
     /// A front-coded term declared a shared prefix longer than the term it
     /// shares with.
     InvalidSharedPrefix {
@@ -278,6 +285,10 @@ impl std::fmt::Display for FormatError {
             Self::InvalidDocId(id) => write!(f, "document id {id} out of range"),
             Self::InvalidFieldId(id) => write!(f, "field id {id} out of range"),
             Self::InvalidTermId(id) => write!(f, "term id {id} out of range"),
+            Self::LanguageMismatch { expected, found } => write!(
+                f,
+                "index was built for language {found:?}, not {expected:?}"
+            ),
             Self::InvalidSharedPrefix { shared, available } => write!(
                 f,
                 "front-coded term shares {shared} bytes with a {available}-byte term"

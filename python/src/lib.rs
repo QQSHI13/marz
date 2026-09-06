@@ -68,6 +68,15 @@ fn language_for(py: Python<'_>, code: &str) -> PyResult<Arc<dyn Language>> {
     Ok(resolved.language)
 }
 
+/// Resolve without warning, for the load path.
+///
+/// Stored fallback codes (`vi`, `he`, …) are legitimate working indexes, not
+/// typos: warning on every `from_bytes` would spam build scripts that load
+/// per-language indexes in a loop.
+fn language_for_load(code: &str) -> Arc<dyn Language> {
+    registry::resolve(code).language
+}
+
 /// Language codes this build supports.
 #[pyfunction]
 fn languages() -> Vec<String> {
@@ -88,9 +97,16 @@ fn languages() -> Vec<String> {
 fn field_text(doc: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<String>> {
     let value = match doc.get_item(name) {
         Ok(value) => value,
-        // A mapping raises KeyError for an absent key; treat that as absent
-        // rather than propagating, so callers need not pad every document.
-        Err(_) => return Ok(None),
+        // Only a missing key means "absent". Any other failure — e.g. `doc`
+        // is not a mapping at all (`doc=42`, `doc="str"`) raising TypeError —
+        // must propagate, otherwise every type error becomes a misleading
+        // "missing reference field".
+        Err(e) => {
+            if e.is_instance_of::<pyo3::exceptions::PyKeyError>(doc.py()) {
+                return Ok(None);
+            }
+            return Err(e);
+        }
     };
     if value.is_none() {
         return Ok(None);
@@ -164,6 +180,18 @@ impl IndexBuilder {
     #[new]
     #[pyo3(signature = (language, *, ref_field = "id", k1 = 1.2, b = 0.75))]
     fn new(py: Python<'_>, language: &str, ref_field: &str, k1: f64, b: f64) -> PyResult<Self> {
+        if language.trim().is_empty() {
+            return Err(PyValueError::new_err("language must not be empty"));
+        }
+        if ref_field.is_empty() {
+            return Err(PyValueError::new_err("ref_field must not be empty"));
+        }
+        if !k1.is_finite() {
+            return Err(PyValueError::new_err("k1 must be a finite number"));
+        }
+        if !b.is_finite() {
+            return Err(PyValueError::new_err("b must be a finite number"));
+        }
         Ok(Self {
             language_code: language.to_string(),
             language: language_for(py, language)?,
@@ -181,6 +209,17 @@ impl IndexBuilder {
     /// reads the fields declared at the time it is called.
     #[pyo3(signature = (name, boost = 1.0))]
     fn field(&mut self, name: &str, boost: f64) -> PyResult<()> {
+        if name.is_empty() {
+            return Err(PyValueError::new_err("field name must not be empty"));
+        }
+        if name.contains('/') {
+            return Err(PyValueError::new_err(format!(
+                "field {name:?} must not contain '/' (breaks index serialization)"
+            )));
+        }
+        if !boost.is_finite() {
+            return Err(PyValueError::new_err("boost must be a finite number"));
+        }
         if self.fields.iter().any(|(existing, _)| existing == name) {
             return Err(PyValueError::new_err(format!(
                 "field {name:?} is already declared"
@@ -205,6 +244,9 @@ impl IndexBuilder {
     /// searchable fields may be absent or `None`.
     #[pyo3(signature = (doc, boost = 1.0))]
     fn add(&mut self, doc: &Bound<'_, PyAny>, boost: f64) -> PyResult<()> {
+        if !boost.is_finite() {
+            return Err(PyValueError::new_err("boost must be a finite number"));
+        }
         if self.fields.is_empty() {
             return Err(PyValueError::new_err(
                 "declare at least one field with field() before adding documents",
@@ -253,7 +295,7 @@ impl IndexBuilder {
     /// equivalent indexes rather than an index and an empty one. Building is not
     /// cheap, but a `build()` that quietly emptied the builder would turn a
     /// stray second call into a silently empty search index.
-    fn build(&mut self, py: Python<'_>) -> Index {
+    fn build(&self, py: Python<'_>) -> Index {
         let language = self.language.clone();
         let ref_field = self.ref_field.clone();
         let fields = self.fields.clone();
@@ -446,17 +488,18 @@ impl Index {
         // spending the load, and so a caller gets a FormatError rather than a
         // confusing language mismatch on bytes that are not an index at all.
         let stored = marz_core::BinaryIndex::open(data)
-            .map_err(|e| FormatError::new_err(e.to_string()))?
+            .map_err(|e| FormatError::new_err(format!("not a Marz index: {e}")))?
             .language()
             .to_string();
         if let Some(requested) = language {
             if requested != stored {
-                return Err(PyValueError::new_err(format!(
+                return Err(FormatError::new_err(format!(
                     "index was built for language {stored:?}, not {requested:?}"
                 )));
             }
         }
-        let lang = language_for(py, &stored)?;
+        // Silent resolve: stored fallback codes are legitimate, not typos.
+        let lang = language_for_load(&stored);
 
         // `data` borrows a Python buffer, which cannot cross a GIL release, so
         // copy it first. The copy is a fraction of what the load allocates —
@@ -466,7 +509,7 @@ impl Index {
         let owned = data.to_vec();
         let index = py
             .detach(move || CoreIndex::from_binary(&owned, lang))
-            .map_err(|e| FormatError::new_err(e.to_string()))?;
+            .map_err(|e| FormatError::new_err(format!("not a Marz index: {e}")))?;
         Ok(Self {
             inner: Arc::new(index),
             language_code: stored,
@@ -475,13 +518,23 @@ impl Index {
 
     /// Read an index from `to_json()` output.
     #[staticmethod]
-    fn from_json(py: Python<'_>, data: &str, language: &str) -> PyResult<Self> {
+    fn from_json(py: Python<'_>, data: &Bound<'_, PyAny>, language: &str) -> PyResult<Self> {
+        // Accept `str` or UTF-8 `bytes`: callers holding `Path.read_bytes()`
+        // should not have to decode first.
+        let json: String = if let Ok(s) = data.extract::<&str>() {
+            s.to_string()
+        } else if let Ok(b) = data.extract::<&[u8]>() {
+            std::str::from_utf8(b)
+                .map_err(|e| FormatError::new_err(format!("not a Marz index: {e}")))?
+                .to_string()
+        } else {
+            return Err(PyTypeError::new_err("data must be str or bytes"));
+        };
         let lang = language_for(py, language)?;
-        let data = data.to_string();
         let code = language.to_string();
         let index = py
-            .detach(move || CoreIndex::load(&data, lang))
-            .map_err(|e| PyValueError::new_err(format!("could not load JSON index: {e}")))?;
+            .detach(move || CoreIndex::load(&json, lang))
+            .map_err(|e| FormatError::new_err(format!("not a Marz index: {e}")))?;
         Ok(Self {
             inner: Arc::new(index),
             language_code: code,
@@ -545,7 +598,7 @@ fn tokenize(py: Python<'_>, text: &str, language: &str) -> PyResult<Vec<String>>
 fn index_language(data: &[u8]) -> PyResult<String> {
     marz_core::BinaryIndex::open(data)
         .map(|index| index.language().to_string())
-        .map_err(|e| FormatError::new_err(e.to_string()))
+        .map_err(|e| FormatError::new_err(format!("not a Marz index: {e}")))
 }
 
 /// Native extension module. Import from `marz`, not from here.

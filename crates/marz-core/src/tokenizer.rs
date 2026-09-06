@@ -3,6 +3,12 @@
 use crate::normalize::normalize;
 use crate::token::Token;
 
+/// Whether `c` is a word character for trimming: alphanumeric or `_`.
+#[inline]
+pub fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 /// Tokenize text by splitting on separator characters.
 ///
 /// `separators` is a string where each character is considered a separator.
@@ -11,17 +17,51 @@ use crate::token::Token;
 /// positions measured in **characters**, not bytes, so they remain valid for
 /// non-ASCII text.
 ///
+/// Positions are offsets into the **normalized** text, not the original input:
+/// normalization is not length-preserving (`ｶﾞ` is two code points becoming
+/// one `ガ`), so highlighting must normalize the field text first (see the
+/// `normalize` export in the Python/WASM bindings).
+///
 /// `normalize` is idempotent, so callers that have already normalized their
 /// input (such as the CJK tokenizer, which normalizes the whole string before
-/// splitting it into script runs) may call this safely.
+/// splitting it into script runs) may call [`tokenize_normalized`] to avoid a
+/// second pass.
 pub fn tokenize_with_separator(text: &str, separators: &str) -> Vec<Token> {
-    let normalized = normalize(text);
+    tokenize_normalized(&normalize(text), separators)
+}
+
+/// Tokenize already-normalized text, skipping the second normalize pass.
+///
+/// `text` must already be [`normalize`]d. Used by the CJK tokenizer for Latin
+/// runs sliced out of an already-normalized string.
+pub fn tokenize_normalized(normalized: &str, separators: &str) -> Vec<Token> {
     let chars: Vec<char> = normalized.chars().collect();
+    // Fast path for the common ASCII separators: a 128-entry table instead of
+    // `str::contains` (O(S)) per character.
+    let mut ascii_sep = [false; 128];
+    let mut has_non_ascii_sep = false;
+    for c in separators.chars() {
+        if (c as u32) < 128 {
+            ascii_sep[c as usize] = true;
+        } else {
+            has_non_ascii_sep = true;
+        }
+    }
+    let is_sep = |ch: char| {
+        if (ch as u32) < 128 {
+            ascii_sep[ch as usize]
+        } else if has_non_ascii_sep {
+            separators.contains(ch)
+        } else {
+            false
+        }
+    };
+
     let mut tokens = Vec::new();
     let mut slice_start = 0;
 
     for (i, &ch) in chars.iter().enumerate() {
-        if separators.contains(ch) {
+        if is_sep(ch) {
             if i > slice_start {
                 let term: String = chars[slice_start..i].iter().collect();
                 let index = tokens.len();

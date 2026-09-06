@@ -5,8 +5,8 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
 struct Context {
@@ -157,7 +157,9 @@ static A_3: &'static [Among<Context>; 4] = &[
     Among("ź", -1, 4, None),
 ];
 
-static G_v: &'static [u8; 24] = &[17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 16, 0, 0, 1];
+static G_v: &'static [u8; 24] = &[
+    17, 65, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 16, 0, 0, 1,
+];
 
 fn r_mark_regions(env: &mut SnowballEnv, context: &mut Context) -> bool {
     context.i_p1 = env.limit;
@@ -170,11 +172,11 @@ fn r_mark_regions(env: &mut SnowballEnv, context: &mut Context) -> bool {
     }
     env.next_char();
     context.i_p1 = env.cursor;
-    return true
+    return true;
 }
 
 fn r_R1(env: &mut SnowballEnv, context: &mut Context) -> bool {
-    return context.i_p1 <= env.cursor
+    return context.i_p1 <= env.cursor;
 }
 
 fn r_remove_endings(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -210,21 +212,19 @@ fn r_remove_endings(env: &mut SnowballEnv, context: &mut Context) -> bool {
         2 => {
             env.slice_from("s");
         }
-        3 => {
-            'lab1: loop {
-                let v_3 = env.limit - env.cursor;
-                'lab2: loop {
-                    if !r_R1(env, context) {
-                        break 'lab2;
-                    }
-                    env.slice_del();
-                    break 'lab1;
+        3 => 'lab1: loop {
+            let v_3 = env.limit - env.cursor;
+            'lab2: loop {
+                if !r_R1(env, context) {
+                    break 'lab2;
                 }
-                env.cursor = env.limit - v_3;
-                env.slice_from("s");
+                env.slice_del();
                 break 'lab1;
             }
-        }
+            env.cursor = env.limit - v_3;
+            env.slice_from("s");
+            break 'lab1;
+        },
         4 => {
             env.slice_from("ł");
         }
@@ -233,7 +233,10 @@ fn r_remove_endings(env: &mut SnowballEnv, context: &mut Context) -> bool {
             let v_4 = env.limit - env.cursor;
             'lab3: loop {
                 env.ket = env.cursor;
-                if (env.cursor - 1 <= env.limit_backward || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 99 as u8 && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 122 as u8)) {
+                if (env.cursor - 1 <= env.limit_backward
+                    || (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 99 as u8
+                        && env.current.as_bytes()[(env.cursor - 1) as usize] as u8 != 122 as u8))
+                {
                     env.cursor = env.limit - v_4;
                     break 'lab3;
                 }
@@ -251,12 +254,12 @@ fn r_remove_endings(env: &mut SnowballEnv, context: &mut Context) -> bool {
                     2 => {
                         env.slice_from("s");
                     }
-                    _ => ()
+                    _ => (),
                 }
                 break 'lab3;
             }
         }
-        _ => ()
+        _ => (),
     }
     let v_5 = env.limit - env.cursor;
     'lab4: loop {
@@ -269,7 +272,7 @@ fn r_remove_endings(env: &mut SnowballEnv, context: &mut Context) -> bool {
         env.slice_del();
         break 'lab4;
     }
-    return true
+    return true;
 }
 
 fn r_normalize_consonant(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -296,15 +299,13 @@ fn r_normalize_consonant(env: &mut SnowballEnv, context: &mut Context) -> bool {
         4 => {
             env.slice_from("z");
         }
-        _ => ()
+        _ => (),
     }
-    return true
+    return true;
 }
 
 pub fn stem(env: &mut SnowballEnv) -> bool {
-    let mut context = &mut Context {
-        i_p1: 0,
-    };
+    let mut context = &mut Context { i_p1: 0 };
     let v_1 = env.cursor;
     r_mark_regions(env, context);
     env.cursor = v_1;
@@ -331,5 +332,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
         env.cursor = env.limit_backward;
         break 'lab0;
     }
-    return true
+    return true;
 }

@@ -85,14 +85,33 @@ impl MarzBuilder {
         // Resolved and discarded: this is here to reject a bad code at
         // construction. Deferring it to `build` would let a caller stage a
         // thousand documents before learning the language was misspelled.
-        language_for(language)?;
+        // `language_for` never throws (unknown codes fall back with a warning),
+        // so no `?` — but empty codes are always a bug.
+        if language.trim().is_empty() {
+            return Err(error("language must not be empty"));
+        }
+        let _ = language_for(language);
+        let ref_field = ref_field.unwrap_or_else(|| "id".to_string());
+        if ref_field.trim().is_empty() {
+            return Err(error("refField must not be empty"));
+        }
+        let k1 = match k1 {
+            Some(v) if v.is_finite() && v >= 0.0 => v,
+            Some(_) => return Err(error("k1 must be a finite number >= 0")),
+            None => 1.2,
+        };
+        let b = match b {
+            Some(v) if v.is_finite() => v.clamp(0.0, 1.0),
+            Some(_) => return Err(error("b must be a finite number")),
+            None => 0.75,
+        };
         Ok(MarzBuilder {
             language_code: language.to_string(),
-            ref_field: ref_field.unwrap_or_else(|| "id".to_string()),
+            ref_field,
             fields: Vec::new(),
             docs: Vec::new(),
-            k1: k1.unwrap_or(1.2),
-            b: b.unwrap_or(0.75),
+            k1,
+            b,
         })
     }
 
@@ -101,6 +120,14 @@ impl MarzBuilder {
     /// Fields must be declared before the documents that use them: `add` reads
     /// only the fields declared when it is called.
     pub fn field(&mut self, name: &str, boost: Option<f64>) -> Result<(), JsValue> {
+        if name.is_empty() {
+            return Err(error("field name must not be empty"));
+        }
+        if name.contains('/') {
+            return Err(error(&format!(
+                "field {name:?} must not contain '/' (breaks index serialization)"
+            )));
+        }
         if self.fields.iter().any(|(existing, _)| existing == name) {
             return Err(error(&format!("field {name:?} is already declared")));
         }
@@ -113,7 +140,12 @@ impl MarzBuilder {
                  pass a different refField to index it as text"
             )));
         }
-        self.fields.push((name.to_string(), boost.unwrap_or(1.0)));
+        let boost = match boost {
+            Some(v) if v.is_finite() => v.max(0.0),
+            Some(_) => return Err(error("field boost must be a finite number")),
+            None => 1.0,
+        };
+        self.fields.push((name.to_string(), boost));
         Ok(())
     }
 
@@ -122,11 +154,19 @@ impl MarzBuilder {
     /// The reference field must be present and a string; searchable fields may
     /// be absent, `null` or `undefined`.
     pub fn add(&mut self, doc: &JsValue, boost: Option<f64>) -> Result<(), JsValue> {
+        if !doc.is_object() {
+            return Err(error("document must be an object"));
+        }
         if self.fields.is_empty() {
             return Err(error(
                 "declare at least one field with field() before adding documents",
             ));
         }
+        let boost = match boost {
+            Some(v) if v.is_finite() => v.max(0.0),
+            Some(_) => return Err(error("document boost must be a finite number")),
+            None => 1.0,
+        };
         let doc_ref = field_text(doc, &self.ref_field)?.ok_or_else(|| {
             error(&format!(
                 "document is missing its reference field {:?}",
@@ -142,7 +182,7 @@ impl MarzBuilder {
         }
         self.docs.push(StagedDoc {
             doc_ref,
-            boost: boost.unwrap_or(1.0),
+            boost,
             fields,
         });
         Ok(())
@@ -154,12 +194,49 @@ impl MarzBuilder {
     /// ones stay staged. Call `clear()` if a half-filled builder is not wanted.
     #[wasm_bindgen(js_name = "addMany")]
     pub fn add_many(&mut self, docs: &JsValue, boost: Option<f64>) -> Result<(), JsValue> {
-        let iterator = js_sys::try_iter(docs)?
+        let iterator = js_sys::try_iter(docs)
+            .map_err(|e| {
+                error(&format!(
+                    "addMany expects an array or other iterable: {}",
+                    js_sys::JSON::stringify(&e)
+                        .ok()
+                        .and_then(|s| s.as_string())
+                        .unwrap_or_else(|| "unreadable error".to_string())
+                ))
+            })?
             .ok_or_else(|| error("addMany expects an array or other iterable"))?;
         for doc in iterator {
-            self.add(&doc?, boost)?;
+            let doc = doc.map_err(|e| {
+                error(&format!(
+                    "addMany failed to read a document: {}",
+                    js_sys::JSON::stringify(&e)
+                        .ok()
+                        .and_then(|s| s.as_string())
+                        .unwrap_or_else(|| "unreadable error".to_string())
+                ))
+            })?;
+            self.add(&doc, boost)?;
         }
         Ok(())
+    }
+
+    /// Shared core-builder construction (fields + docs + BM25 params).
+    fn core_builder(&self) -> CoreBuilder {
+        let language = language_for(&self.language_code);
+        let mut builder = CoreBuilder::new(language);
+        builder
+            .ref_field(self.ref_field.clone())
+            .k1(self.k1)
+            .b(self.b);
+        for (name, boost) in &self.fields {
+            builder.field(name.clone(), *boost);
+        }
+        for doc in &self.docs {
+            builder.add(doc.doc_ref.clone(), doc.boost, |name| {
+                doc.fields.get(name).cloned()
+            });
+        }
+        builder
     }
 
     /// Tokenize and score the staged documents, returning the binary index.
@@ -172,21 +249,10 @@ impl MarzBuilder {
     /// a `build()` that quietly emptied the builder would turn a stray second
     /// call into a silently empty search index.
     pub fn build(&self, positions: Option<bool>) -> Result<Vec<u8>, JsValue> {
-        let language = language_for(&self.language_code)?;
-        let mut builder = CoreBuilder::new(language);
-        builder
-            .ref_field(self.ref_field.clone())
-            .k1(self.k1)
-            .b(self.b);
-        for (name, boost) in &self.fields {
-            builder.field(name.clone(), *boost);
-        }
-        for doc in &self.docs {
-            builder.add(doc.doc_ref.clone(), doc.boost, |name| {
-                doc.fields.get(name).cloned()
-            });
-        }
-        Ok(builder.build().to_binary(positions.unwrap_or(true)))
+        Ok(self
+            .core_builder()
+            .build()
+            .to_binary(positions.unwrap_or(true)))
     }
 
     /// Build and load in one step, skipping the serialize/parse round trip.
@@ -195,23 +261,9 @@ impl MarzBuilder {
     /// built to be searched now, not stored. Use `build()` when the bytes are
     /// what is wanted, to cache in IndexedDB or hand to a worker.
     #[wasm_bindgen(js_name = "buildAndLoad")]
-    pub fn build_and_load(&self) -> Result<crate::MarzIndex, JsValue> {
-        let language = language_for(&self.language_code)?;
-        let mut builder = CoreBuilder::new(language);
-        builder
-            .ref_field(self.ref_field.clone())
-            .k1(self.k1)
-            .b(self.b);
-        for (name, boost) in &self.fields {
-            builder.field(name.clone(), *boost);
-        }
-        for doc in &self.docs {
-            builder.add(doc.doc_ref.clone(), doc.boost, |name| {
-                doc.fields.get(name).cloned()
-            });
-        }
+    pub fn build_and_load(&self, positions: Option<bool>) -> Result<crate::MarzIndex, JsValue> {
         Ok(crate::MarzIndex::from_parts(
-            builder.build(),
+            self.core_builder().build(),
             self.language_code.clone(),
         ))
     }

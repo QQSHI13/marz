@@ -33,7 +33,7 @@
 use crate::language::Language;
 use crate::stemmers::snowball::SnowballEnv;
 use crate::token::Token;
-use crate::tokenizer::tokenize_with_separator;
+use crate::tokenizer::{is_word_char, tokenize_with_separator};
 
 /// Separators for languages written with spaces and Latin-style punctuation.
 ///
@@ -77,6 +77,13 @@ impl Language for SnowballLanguage {
     }
 
     fn tokenize(&self, text: &str) -> Vec<Token> {
+        // Turkish needs dotless-I lowercasing; the global `normalize` would
+        // merge `I`/`ı`. Fold with Turkish rules first, then split without a
+        // second (wrong) normalize pass.
+        if self.code == "tr" {
+            let normalized = crate::normalize::normalize_tr(text);
+            return crate::tokenizer::tokenize_normalized(&normalized, self.separators);
+        }
         tokenize_with_separator(text, self.separators)
     }
 
@@ -97,7 +104,19 @@ impl Language for SnowballLanguage {
         // guarantee — and an uppercase term silently fails to stem rather than
         // erroring, which is the kind of bug that surfaces as "search works
         // except for capitalized words".
-        let lowered = term.to_lowercase();
+        let lowered = if self.code == "tr" {
+            let mut s = String::with_capacity(term.len());
+            for c in term.chars() {
+                match c {
+                    'I' => s.push('ı'),
+                    'İ' => s.push('i'),
+                    _ => s.extend(c.to_lowercase()),
+                }
+            }
+            s
+        } else {
+            term.to_lowercase()
+        };
         let mut env = SnowballEnv::create(&lowered);
         (self.stem_fn)(&mut env);
         env.get_current().into_owned()
@@ -110,10 +129,6 @@ impl Language for SnowballLanguage {
     fn pipeline_labels(&self) -> Vec<&'static str> {
         vec!["trimmer", "stopWordFilter", "stemmer"]
     }
-}
-
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
 }
 
 /// Every language code backed by a Snowball stemmer.
@@ -216,6 +231,7 @@ pub const SNOWBALL_LANGUAGES: &[(&str, StemFn)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::language::Language;
 
     /// The language for `code`, or `None` if this build did not include it.
     ///
@@ -250,7 +266,9 @@ mod tests {
             .expect("stemmers directory")
             .filter_map(|e| {
                 let name = e.ok()?.file_name().to_string_lossy().into_owned();
-                name.strip_prefix("st_")?.strip_suffix(".rs").map(String::from)
+                name.strip_prefix("st_")?
+                    .strip_suffix(".rs")
+                    .map(String::from)
             })
             .collect();
         generated.sort();
@@ -356,14 +374,17 @@ mod tests {
             ("pl", "dokumentacji", "dokumentacja"),
             ("id", "pencarian", "cari"),
         ];
+        let mut ran = 0;
         for (code, inflected, base) in cases {
-            let l = lang(code);
+            let Some(l) = lang(code) else { continue };
+            ran += 1;
             assert_eq!(
                 l.stem(inflected),
                 l.stem(base),
                 "{code}: {inflected} and {base} must stem alike"
             );
         }
+        assert!(ran > 0, "no Snowball languages enabled; nothing was tested");
     }
 
     /// Snowball's Arabic and Hindi algorithms strip diacritics themselves, so
@@ -371,7 +392,7 @@ mod tests {
     /// normalization step exists for those scripts.
     #[test]
     fn arabic_diacritics_are_stripped() {
-        let ar = lang("ar");
+        let Some(ar) = lang("ar") else { return };
         assert_eq!(ar.stem("مُحَرِّك"), ar.stem("محرك"));
         assert_eq!(ar.stem("الْبَحْث"), ar.stem("بحث"));
     }
@@ -380,7 +401,7 @@ mod tests {
     /// pipeline's normalization in front of it.
     #[test]
     fn stemming_does_not_depend_on_case() {
-        let de = lang("de");
+        let Some(de) = lang("de") else { return };
         assert_eq!(de.stem("Suchmaschinen"), de.stem("suchmaschinen"));
     }
 
@@ -388,19 +409,22 @@ mod tests {
     /// for. Mixed scripts and empty strings reach `stem` in real corpora.
     #[test]
     fn stemming_tolerates_unexpected_input() {
+        let mut ran = 0;
         for (code, _) in SNOWBALL_LANGUAGES {
-            let l = lang(code);
+            let Some(l) = lang(code) else { continue };
+            ran += 1;
             assert_eq!(l.stem(""), "", "{code} mangled the empty string");
             // Not asserting the output, only that there is one.
             let _ = l.stem("中文");
             let _ = l.stem("123");
             let _ = l.stem("a");
         }
+        assert!(ran > 0, "no Snowball languages enabled; nothing was tested");
     }
 
     #[test]
     fn tokenization_splits_on_words_and_hyphens() {
-        let de = lang("de");
+        let Some(de) = lang("de") else { return };
         let terms: Vec<String> = de
             .tokenize("Die Suchmaschine ist Open-Source")
             .into_iter()

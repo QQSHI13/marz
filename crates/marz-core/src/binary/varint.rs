@@ -115,7 +115,8 @@ impl<'a> Cursor<'a> {
     ///
     /// Fails on a truncated stream, and on a run of continuation bytes longer
     /// than any `u64` encoding — which would otherwise let a corrupt file
-    /// silently shift bits off the top of the accumulator.
+    /// silently shift bits off the top of the accumulator. The 10th byte may
+    /// only carry one payload bit (bit 63); anything more means bits were lost.
     pub fn read_varint(&mut self) -> Result<u64, FormatError> {
         let mut value: u64 = 0;
         let mut shift = 0u32;
@@ -124,6 +125,10 @@ impl<'a> Cursor<'a> {
                 section: self.section,
             })?;
             self.pos += 1;
+            if shift == 63 && (byte & 0x7E) != 0 {
+                // Payload bits 64..69 would be shifted off the top of a u64.
+                return Err(FormatError::MalformedVarint);
+            }
             value |= u64::from(byte & 0x7f) << shift;
             if byte & 0x80 == 0 {
                 return Ok(value);

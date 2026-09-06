@@ -98,6 +98,19 @@ impl Language for MultiLanguage {
                 }
             }
         }
+        // Concatenating per-language runs leaves tokens out of position order,
+        // which breaks phrase adjacency and the binary writer's delta coding
+        // (its `saturating_sub` would silently encode backward deltas as 0).
+        // Sort by start offset; stable so same-offset tokens keep language order.
+        tokens.sort_by_key(|t| t.position().map(|(s, _)| s).unwrap_or(usize::MAX));
+        // Reassign sequential indices so downstream `index` metadata is dense.
+        for (i, token) in tokens.iter_mut().enumerate() {
+            if let Some(crate::token::TokenMetadata::Integer(idx)) =
+                token.metadata.get_mut(crate::token::INDEX)
+            {
+                *idx = i;
+            }
+        }
         tokens
     }
 

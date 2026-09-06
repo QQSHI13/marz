@@ -5,8 +5,8 @@
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-use crate::stemmers::snowball::SnowballEnv;
 use crate::stemmers::snowball::Among;
+use crate::stemmers::snowball::SnowballEnv;
 
 #[derive(Clone)]
 struct Context {
@@ -66,12 +66,16 @@ fn r_mark_regions(env: &mut SnowballEnv, context: &mut Context) -> bool {
         break 'lab0;
     }
     env.cursor = v_2;
-    return true
+    return true;
 }
 
 fn r_remove_noun_prefixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
     env.bra = env.cursor;
-    if (env.cursor + 1 >= env.limit || env.current.as_bytes()[(env.cursor + 1) as usize] as u8 >> 5 != 3 as u8 || ((33314 as i32 >> (env.current.as_bytes()[(env.cursor + 1) as usize] as u8 & 0x1f)) & 1) == 0) {
+    if (env.cursor + 1 >= env.limit
+        || env.current.as_bytes()[(env.cursor + 1) as usize] as u8 >> 5 != 3 as u8
+        || ((33314 as i32 >> (env.current.as_bytes()[(env.cursor + 1) as usize] as u8 & 0x1f)) & 1)
+            == 0)
+    {
         return false;
     }
 
@@ -93,7 +97,7 @@ fn r_remove_noun_prefixes(env: &mut SnowballEnv, context: &mut Context) -> bool 
     }
     env.next_char();
     env.slice_del();
-    return true
+    return true;
 }
 
 fn r_remove_verb_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -103,7 +107,11 @@ fn r_remove_verb_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bool 
     let v_1 = env.limit_backward;
     env.limit_backward = context.i_pV;
     env.ket = env.cursor;
-    if (env.cursor <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 3 as u8 || ((162 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f)) & 1) == 0) {
+    if (env.cursor <= env.limit_backward
+        || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 3 as u8
+        || ((162 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f)) & 1)
+            == 0)
+    {
         env.limit_backward = v_1;
         return false;
     }
@@ -115,7 +123,7 @@ fn r_remove_verb_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bool 
     env.bra = env.cursor;
     env.slice_del();
     env.limit_backward = v_1;
-    return true
+    return true;
 }
 
 fn r_remove_nominal_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bool {
@@ -125,7 +133,11 @@ fn r_remove_nominal_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bo
     let v_1 = env.limit_backward;
     env.limit_backward = context.i_pV;
     env.ket = env.cursor;
-    if (env.cursor <= env.limit_backward || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 3 as u8 || ((33282 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f)) & 1) == 0) {
+    if (env.cursor <= env.limit_backward
+        || env.current.as_bytes()[(env.cursor - 1) as usize] as u8 >> 5 != 3 as u8
+        || ((33282 as i32 >> (env.current.as_bytes()[(env.cursor - 1) as usize] as u8 & 0x1f)) & 1)
+            == 0)
+    {
         env.limit_backward = v_1;
         return false;
     }
@@ -137,13 +149,11 @@ fn r_remove_nominal_suffixes(env: &mut SnowballEnv, context: &mut Context) -> bo
     env.bra = env.cursor;
     env.slice_del();
     env.limit_backward = v_1;
-    return true
+    return true;
 }
 
 pub fn stem(env: &mut SnowballEnv) -> bool {
-    let mut context = &mut Context {
-        i_pV: 0,
-    };
+    let mut context = &mut Context { i_pV: 0 };
     if !r_mark_regions(env, context) {
         return false;
     }
@@ -159,5 +169,5 @@ pub fn stem(env: &mut SnowballEnv) -> bool {
     let v_3 = env.cursor;
     r_remove_noun_prefixes(env, context);
     env.cursor = v_3;
-    return true
+    return true;
 }
