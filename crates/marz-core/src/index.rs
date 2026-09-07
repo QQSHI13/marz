@@ -283,7 +283,8 @@ impl IndexBuilder {
     /// Panics on an empty name or one containing `/`: field names are serialized
     /// as `field/doc` in JSON, so a `/` never round-trips, and an empty name is
     /// always a configuration bug. Failing fast beats a silently corrupt index.
-    /// Non-finite boosts fall back to `1.0`.
+    /// Non-finite boosts fall back to `1.0`; negative boosts clamp to `0.0`
+    /// (they still match, contributing no score).
     pub fn field(&mut self, name: impl Into<String>, boost: f64) -> &mut Self {
         let name = name.into();
         assert!(!name.is_empty(), "field name must not be empty");
@@ -1383,5 +1384,19 @@ mod tests {
             zeroed.iter().all(|r| r.score == 0.0),
             "a ^0 boost must contribute no score"
         );
+    }
+
+    #[test]
+    fn duplicate_doc_ref_replaces_instead_of_merging() {
+        // Upsert: re-adding a ref drops its old postings and leaves N alone.
+        // Merging would double `tf` while overwriting field lengths.
+        let mut builder = IndexBuilder::new(en());
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("d", 1.0, |_| Some("green green green".to_string()));
+        builder.add("d", 1.0, |_| Some("plumb".to_string()));
+        let index = builder.build();
+        assert_eq!(index.document_count(), 1);
+        assert!(index.search("green").unwrap().is_empty());
+        assert_eq!(index.search("plumb").unwrap().len(), 1);
     }
 }

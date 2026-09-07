@@ -576,3 +576,24 @@ class TestCjk:
         index = builder.build()
         assert [hit.ref for hit in index.search("python")] == ["x"]
         assert [hit.ref for hit in index.search("検索")] == ["x"]
+
+
+class TestNormalize:
+    def test_normalize_folds_width_and_case(self):
+        assert marz.normalize("ＲＵＳＴ") == "rust"
+        assert marz.normalize("ｶﾞｲﾄﾞ") == "ガイド"
+
+    def test_match_offsets_index_the_normalized_text(self):
+        # Half-width katakana composes, shifting every later offset: highlight
+        # marz.normalize(text), never the raw input.
+        builder = marz.IndexBuilder("ja")
+        builder.field("body")
+        builder.add({"id": "x", "body": "ｶﾞｲﾄﾞの案内"})
+        hit = builder.build().search("ガイド")[0]
+        normalized = marz.normalize("ｶﾞｲﾄﾞの案内")
+        for fields in hit.matches.values():
+            for start, length in fields["body"]:
+                assert normalized[start : start + length]
+
+    def test_surrounding_whitespace_in_language_code_is_ignored(self):
+        assert marz.IndexBuilder("  en  ").language == "en"

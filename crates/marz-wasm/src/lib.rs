@@ -147,6 +147,9 @@ pub fn index_language(bytes: &[u8]) -> Result<String, JsValue> {
 /// returns `["検索", "エン", "ンジ", "ジン"]` — overlapping bigrams, except that
 /// no bigram crosses the Han/Katakana boundary, because `索エ` spans two words
 /// and would only add noise.
+///
+/// This is a pre-pipeline split: trimming, stop-word removal and stemming are
+/// not applied, so the terms shown are not always the terms indexed.
 #[wasm_bindgen(js_name = "tokenize")]
 pub fn tokenize(text: &str, language: &str) -> Result<Vec<String>, JsValue> {
     let language = language_for(language);

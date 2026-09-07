@@ -31,6 +31,7 @@ try:
         __version__,
         index_language,
         languages,
+        normalize,
         tokenize,
     )
 except ImportError as exc:  # pragma: no cover
@@ -47,5 +48,6 @@ __all__ = [
     "__version__",
     "index_language",
     "languages",
+    "normalize",
     "tokenize",
 ]

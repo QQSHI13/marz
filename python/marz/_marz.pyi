@@ -23,7 +23,10 @@ def languages() -> list[str]:
     """Language codes this build supports."""
 
 def tokenize(text: str, language: str) -> list[str]:
-    """Split `text` the way the index would."""
+    """Split `text` the way the index would (pre-pipeline: no stemming)."""
+
+def normalize(text: str) -> str:
+    """Apply index-time normalization. Match offsets index into this string."""
 
 def index_language(data: bytes) -> str:
     """Read an index's language code without loading it."""

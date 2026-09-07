@@ -97,7 +97,11 @@ impl MarzBuilder {
         }
         let k1 = match k1 {
             Some(v) if v.is_finite() && v >= 0.0 => v,
-            Some(_) => return Err(error("k1 must be a finite number >= 0")),
+            // Clamp philosophy, matching the core and Python bindings: a
+            // negative k1 keeps the default rather than raising. Only
+            // non-finite values are programmer errors worth throwing for.
+            Some(v) if v.is_finite() => 1.2,
+            Some(_) => return Err(error("k1 must be a finite number")),
             None => 1.2,
         };
         let b = match b {
@@ -106,7 +110,7 @@ impl MarzBuilder {
             None => 0.75,
         };
         Ok(MarzBuilder {
-            language_code: language.to_string(),
+            language_code: language.trim().to_string(),
             ref_field,
             fields: Vec::new(),
             docs: Vec::new(),
@@ -118,7 +122,9 @@ impl MarzBuilder {
     /// Declare a searchable field. `boost` multiplies the score of matches in it.
     ///
     /// Fields must be declared before the documents that use them: `add` reads
-    /// only the fields declared when it is called.
+    /// only the fields declared when it is called. A negative `boost` is
+    /// clamped to `0.0` (it still matches, contributing no score); only a
+    /// non-finite boost throws.
     pub fn field(&mut self, name: &str, boost: Option<f64>) -> Result<(), JsValue> {
         if name.is_empty() {
             return Err(error("field name must not be empty"));
@@ -152,7 +158,9 @@ impl MarzBuilder {
     /// Stage a document for indexing.
     ///
     /// The reference field must be present and a string; searchable fields may
-    /// be absent, `null` or `undefined`.
+    /// be absent, `null` or `undefined`. Adding the same reference twice
+    /// replaces the previous document (upsert). A negative `boost` is clamped
+    /// to `0.0`; only a non-finite boost throws.
     pub fn add(&mut self, doc: &JsValue, boost: Option<f64>) -> Result<(), JsValue> {
         if !doc.is_object() {
             return Err(error("document must be an object"));
@@ -242,7 +250,8 @@ impl MarzBuilder {
     /// Tokenize and score the staged documents, returning the binary index.
     ///
     /// Pass `positions = false` to drop highlighting and CJK phrase
-    /// verification, which is about a tenth of the bytes.
+    /// verification, which is about a tenth of the bytes. This also disables
+    /// the CJK phrase ranking boost.
     ///
     /// The staged documents are kept, so building twice yields two equivalent
     /// indexes rather than an index and an empty one. Building is not cheap, but

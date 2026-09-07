@@ -177,6 +177,9 @@ impl IndexBuilder {
     /// Create a builder for `language`, one of the codes `languages()` returns.
     ///
     /// `k1` and `b` are the BM25 tuning parameters; the defaults match lunr.
+    /// Out-of-range values are clamped, not rejected: `b` to `[0, 1]`, `k1`
+    /// to `>= 0` (a negative `k1` keeps the default `1.2`). Only non-finite
+    /// values raise.
     #[new]
     #[pyo3(signature = (language, *, ref_field = "id", k1 = 1.2, b = 0.75))]
     fn new(py: Python<'_>, language: &str, ref_field: &str, k1: f64, b: f64) -> PyResult<Self> {
@@ -193,7 +196,7 @@ impl IndexBuilder {
             return Err(PyValueError::new_err("b must be a finite number"));
         }
         Ok(Self {
-            language_code: language.to_string(),
+            language_code: language.trim().to_string(),
             language: language_for(py, language)?,
             ref_field: ref_field.to_string(),
             fields: Vec::new(),
@@ -206,7 +209,9 @@ impl IndexBuilder {
     /// Add a searchable field. `boost` multiplies the score of matches in it.
     ///
     /// Fields must be declared before the documents that use them: `add` only
-    /// reads the fields declared at the time it is called.
+    /// reads the fields declared at the time it is called. A negative `boost`
+    /// is clamped to `0.0` (it still matches, contributing no score); only a
+    /// non-finite boost raises.
     #[pyo3(signature = (name, boost = 1.0))]
     fn field(&mut self, name: &str, boost: f64) -> PyResult<()> {
         if name.is_empty() {
@@ -241,7 +246,10 @@ impl IndexBuilder {
     /// Stage a document for indexing.
     ///
     /// `doc` is any mapping. The reference field must be present and a string;
-    /// searchable fields may be absent or `None`.
+    /// searchable fields may be absent or `None`. Adding the same reference
+    /// twice replaces the previous document (upsert): old postings are dropped
+    /// and the document count is not incremented. A negative `boost` is clamped
+    /// to `0.0`; only a non-finite boost raises.
     #[pyo3(signature = (doc, boost = 1.0))]
     fn add(&mut self, doc: &Bound<'_, PyAny>, boost: f64) -> PyResult<()> {
         if !boost.is_finite() {
@@ -384,8 +392,13 @@ impl Hit {
     /// Where each matched term occurred, as
     /// `{term: {field: [(start, length), ...]}}`.
     ///
-    /// Offsets are in characters, not bytes, so they can index a Python `str`
-    /// directly. If the index was built with `positions=False` the terms and
+    /// Offsets are in characters, not bytes — but into the **normalized**
+    /// field text, not the original: normalization folds full-width Latin,
+    /// composes half-width katakana and lowercases, and is not
+    /// length-preserving (`ｶﾞ` is two code points becoming one `ガ`), so
+    /// every offset after such a character is shifted relative to the input.
+    /// Call `marz.normalize(field_text)` first and highlight into that.
+    /// If the index was built with `positions=False` the terms and
     /// fields are still reported and only the position lists are empty — enough
     /// to say a match was in the title, not enough to highlight it.
     #[getter]
@@ -456,7 +469,9 @@ impl Index {
     /// Serialize to the compact binary format.
     ///
     /// Pass `positions=False` to drop highlighting and CJK phrase-verification
-    /// data, which is about a tenth of the file.
+    /// data, which is about a tenth of the file. Note this also disables the
+    /// CJK phrase ranking boost: search still works, but an exact phrase no
+    /// longer outranks scattered bigrams.
     #[pyo3(signature = (*, positions = true))]
     fn to_bytes<'py>(&self, py: Python<'py>, positions: bool) -> Bound<'py, PyBytes> {
         let index = self.inner.clone();
@@ -583,6 +598,10 @@ impl Index {
 ///
 /// Useful for understanding CJK results: `tokenize("検索エンジン", "ja")` shows
 /// the overlapping bigrams that are actually indexed.
+///
+/// This is a pre-pipeline split: trimming, stop-word removal and stemming are
+/// not applied, so the terms shown are not always the terms indexed (e.g.
+/// English shows `running`, the index holds `run`).
 #[pyfunction]
 fn tokenize(py: Python<'_>, text: &str, language: &str) -> PyResult<Vec<String>> {
     let lang = language_for(py, language)?;
@@ -591,6 +610,18 @@ fn tokenize(py: Python<'_>, text: &str, language: &str) -> PyResult<Vec<String>>
         .into_iter()
         .map(|token| token.term)
         .collect())
+}
+
+/// Apply the same normalization the indexer applies before tokenizing.
+///
+/// Folds full-width Latin to ASCII, composes half-width katakana, collapses
+/// exotic spaces and lowercases. Exported because match positions are offsets
+/// into this string rather than into the input: normalization is not
+/// length-preserving, so highlight `marz.normalize(field_text)` and never the
+/// raw field.
+#[pyfunction]
+fn normalize(text: &str) -> String {
+    marz_core::normalize::normalize(text)
 }
 
 /// Report what language an index was built for, without loading it.
@@ -612,6 +643,7 @@ fn _marz(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("FormatError", m.py().get_type::<FormatError>())?;
     m.add_function(wrap_pyfunction!(languages, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize, m)?)?;
+    m.add_function(wrap_pyfunction!(normalize, m)?)?;
     m.add_function(wrap_pyfunction!(index_language, m)?)?;
     Ok(())
 }

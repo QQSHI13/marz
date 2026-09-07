@@ -136,6 +136,15 @@ The oracle is lunr.**js**, not lunr.py. The two stem terminal `y` differently �
 other. Both cannot be matched. Marz follows lunr.js, because a browser consuming
 a Marz index sits beside lunr.js. See `crates/marz-core/tests/golden.rs`.
 
+## Index compatibility
+
+An index is only valid for the marz that built it. Loading rejects a version
+or language mismatch outright, but tokenizer and stemmer changes between
+releases can shift ranking without tripping either check — so **rebuild every
+index on every marz upgrade**, and pin the Python (`marz-search`) and npm
+(`marz-search`) versions together. Cached or deployed `.marz` bytes from an
+older build must be regenerated, not reused.
+
 ## Layout
 
 - `crates/marz-core` — the engine: tokenizers, stemmer, query parser, BM25
