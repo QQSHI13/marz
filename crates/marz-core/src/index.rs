@@ -806,13 +806,13 @@ impl Index {
                     .map(|(field_name, _)| field_name)
                     .collect();
                 field_names.sort();
-                let fields = field_names
+                let fields: std::collections::BTreeMap<_, _> = field_names
                     .into_iter()
                     .map(|field_name| {
                         let docs_map = &posting.fields[field_name];
                         let mut doc_refs: Vec<&String> = docs_map.keys().collect();
                         doc_refs.sort();
-                        let docs = doc_refs
+                        let docs: std::collections::BTreeMap<_, _> = doc_refs
                             .into_iter()
                             .map(|doc_ref| {
                                 let posting_doc = &docs_map[doc_ref];
@@ -1179,11 +1179,18 @@ struct SerializedIndex {
 }
 
 /// Serialized posting for a single term.
+///
+/// `BTreeMap`s, not `HashMap`s: serde emits map keys in iteration order, so
+/// hash maps would make identical indexes serialize to different bytes on
+/// every build. Docsforge-style pipelines rely on byte-reproducible output.
 #[cfg(feature = "json")]
 #[derive(Serialize, Deserialize)]
 struct SerializedPosting {
     #[serde(flatten)]
-    fields: HashMap<String, HashMap<String, SerializedPostingDoc>>,
+    fields: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, SerializedPostingDoc>,
+    >,
 }
 
 /// Serialized per-document posting data.
