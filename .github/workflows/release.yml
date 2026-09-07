@@ -87,6 +87,12 @@ jobs:
       - run: cargo test --workspace
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
+      - name: Install wasm-opt (binaryen)
+        run: |
+          if ! command -v wasm-opt &> /dev/null; then
+            sudo apt-get update -q && sudo apt-get install -y -q binaryen
+          fi
+          wasm-opt --version
       - run: scripts/build-wasm.sh
       - name: Test the JS bindings
         working-directory: js
@@ -244,6 +250,12 @@ jobs:
         run: npm install -g npm@latest
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
+      - name: Install wasm-opt (binaryen)
+        run: |
+          if ! command -v wasm-opt &> /dev/null; then
+            sudo apt-get update -q && sudo apt-get install -y -q binaryen
+          fi
+          wasm-opt --version
       - name: Build the package
         working-directory: js
         run: |
