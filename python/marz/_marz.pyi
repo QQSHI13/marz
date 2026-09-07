@@ -25,7 +25,7 @@ def languages() -> list[str]:
 def tokenize(text: str, language: str) -> list[str]:
     """Split `text` the way the index would (pre-pipeline: no stemming)."""
 
-def normalize(text: str) -> str:
+def normalize(text: str, language: str = "en") -> str:
     """Apply index-time normalization. Match offsets index into this string."""
 
 def index_language(data: bytes) -> str:

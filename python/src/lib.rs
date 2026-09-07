@@ -186,7 +186,7 @@ impl IndexBuilder {
         if language.trim().is_empty() {
             return Err(PyValueError::new_err("language must not be empty"));
         }
-        if ref_field.is_empty() {
+        if ref_field.trim().is_empty() {
             return Err(PyValueError::new_err("ref_field must not be empty"));
         }
         if !k1.is_finite() {
@@ -214,7 +214,7 @@ impl IndexBuilder {
     /// non-finite boost raises.
     #[pyo3(signature = (name, boost = 1.0))]
     fn field(&mut self, name: &str, boost: f64) -> PyResult<()> {
-        if name.is_empty() {
+        if name.trim().is_empty() {
             return Err(PyValueError::new_err("field name must not be empty"));
         }
         if name.contains('/') {
@@ -266,6 +266,11 @@ impl IndexBuilder {
                 self.ref_field
             ))
         })?;
+        if doc_ref.is_empty() {
+            return Err(PyValueError::new_err(
+                "document reference must not be empty",
+            ));
+        }
 
         let mut fields = HashMap::with_capacity(self.fields.len());
         for (name, _) in &self.fields {
@@ -545,8 +550,12 @@ impl Index {
         } else {
             return Err(PyTypeError::new_err("data must be str or bytes"));
         };
-        let lang = language_for(py, language)?;
-        let code = language.to_string();
+        // Silent resolve like `from_bytes`: stored fallback codes (`vi`, …)
+        // are legitimate working indexes, and surrounding whitespace is not a
+        // different language. A mismatch against the stored code still raises
+        // below via `CoreIndex::load`.
+        let code = language.trim().to_string();
+        let lang = language_for_load(&code);
         let index = py
             .detach(move || CoreIndex::load(&json, lang))
             .map_err(|e| FormatError::new_err(format!("not a Marz index: {e}")))?;
@@ -619,9 +628,13 @@ fn tokenize(py: Python<'_>, text: &str, language: &str) -> PyResult<Vec<String>>
 /// into this string rather than into the input: normalization is not
 /// length-preserving, so highlight `marz.normalize(field_text)` and never the
 /// raw field.
+///
+/// `language` selects the lowercasing rules and must be the index's language:
+/// Turkish (`"tr"`) folds `I` to `ı`, every other language to `i`.
 #[pyfunction]
-fn normalize(text: &str) -> String {
-    marz_core::normalize::normalize(text)
+#[pyo3(signature = (text, language = "en"))]
+fn normalize(text: &str, language: &str) -> String {
+    marz_core::normalize::normalize_for_language(language.trim(), text)
 }
 
 /// Report what language an index was built for, without loading it.

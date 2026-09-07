@@ -255,7 +255,9 @@ fn bench_load(c: &mut Criterion) {
         // replaced, because "loads in N ms" is only meaningful next to what it
         // used to cost — and JSON parsing is what a lunr-style index pays on
         // every page load.
+        #[cfg(feature = "json")]
         let json = index.to_json();
+        #[cfg(feature = "json")]
         group.bench_with_input(BenchmarkId::new("json", size), &json, |b, json| {
             b.iter(|| Index::load(black_box(json), Arc::new(English)).unwrap());
         });
@@ -332,6 +334,7 @@ fn bench_serialize(c: &mut Criterion) {
     let mut group = c.benchmark_group("serialize");
 
     let index = build_index(&english_docs(5_000), Arc::new(English));
+    #[cfg(feature = "json")]
     group.bench_function("json", |b| b.iter(|| black_box(&index).to_json()));
     group.bench_function("binary", |b| b.iter(|| black_box(&index).to_binary(true)));
     group.bench_function("binary/no-positions", |b| {

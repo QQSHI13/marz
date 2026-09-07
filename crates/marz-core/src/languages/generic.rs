@@ -49,6 +49,14 @@ impl Language for Generic {
     }
 
     fn tokenize(&self, text: &str) -> Vec<Token> {
+        // Turkish folds `I` to `ı`, like the Snowball Turkish tokenizer it
+        // stands in for when the `tr` feature is off. Both sides (index and
+        // query, including the query parser's normalization) must fold the
+        // same way, or trimmed builds disagree with themselves.
+        if self.code == "tr" {
+            let normalized = crate::normalize::normalize_tr(text);
+            return crate::tokenizer::tokenize_normalized(&normalized, GENERIC_SEPARATORS);
+        }
         tokenize_with_separator(text, GENERIC_SEPARATORS)
     }
 

@@ -179,10 +179,16 @@ export async function tokenize(
  *
  * Match positions are offsets into this string, not into the input. See
  * {@link highlight}. Async only for initialization — see {@link tokenize}.
+ *
+ * Pass the index's language for Turkish (`"tr"`), whose `I` folds to `ı`;
+ * every other language folds the default way.
  */
-export async function normalize(text: string): Promise<string> {
+export async function normalize(
+  text: string,
+  language?: string,
+): Promise<string> {
   await initialize();
-  return wasmNormalize(text);
+  return wasmNormalize(text, language);
 }
 
 /** A span of field text, flagged as matched or not. */
@@ -215,6 +221,9 @@ export interface Segment {
  * CJK bigrams overlap, so adjacent matches are merged: a hit on `エン` and `ンジ`
  * becomes one span, not two overlapping ones.
  *
+ * Pass the index's language for Turkish (`"tr"`), whose normalization folds
+ * differently — see {@link normalize}.
+ *
  * ```ts
  * const segments = await highlight(hit, "body", doc.body);
  * el.replaceChildren(...segments.map((s) => {
@@ -233,6 +242,7 @@ export async function highlight(
   hit: SearchResult,
   field: string,
   text: string,
+  language?: string,
 ): Promise<Segment[]> {
   await initialize();
   if (!hit || typeof (hit as SearchResult).matches !== "object" || (hit as SearchResult).matches === null) {
@@ -241,7 +251,9 @@ export async function highlight(
   if (typeof text !== "string" || typeof field !== "string") {
     throw new Error("highlight: field and text must be strings");
   }
-  const normalized = wasmNormalize(text);
+  // Same language rule as normalize(): Turkish folds differently, and the
+  // offsets only line up when both sides fold the same way.
+  const normalized = wasmNormalize(text, language);
   // Code points, so that offsets line up on text containing astral-plane
   // characters. `[...string]` iterates code points; indexing does not.
   const points = [...normalized];

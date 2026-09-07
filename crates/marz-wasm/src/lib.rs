@@ -168,11 +168,15 @@ pub fn tokenize(text: &str, language: &str) -> Result<Vec<String>, JsValue> {
 /// length-preserving — `ｶﾞ` is two code points and becomes one `ガ` — so text
 /// containing half-width katakana shifts every offset after it.
 ///
+/// `language` selects the lowercasing rules and must be the index's language:
+/// Turkish (`"tr"`) folds `I` to `ı`. Omit it for anything else.
+///
 /// A caller highlighting a match must normalize the field text first. That is
 /// what `highlight()` in the JavaScript wrapper does.
 #[wasm_bindgen(js_name = "normalize")]
-pub fn normalize(text: &str) -> String {
-    marz_core::normalize::normalize(text)
+pub fn normalize(text: &str, language: Option<String>) -> String {
+    let code = language.as_deref().unwrap_or("en");
+    marz_core::normalize::normalize_for_language(code.trim(), text)
 }
 
 /// TypeScript declarations for the plain objects [`MarzIndex::search`] returns.
@@ -247,7 +251,9 @@ impl MarzIndex {
             .to_string();
 
         if let Some(expected) = expected_language {
-            if expected != stored {
+            // Trimmed: builders store trimmed codes, so padding is not a
+            // different language.
+            if expected.trim() != stored {
                 return Err(error(&format!(
                     "index was built for language {stored:?}, not {expected:?}"
                 )));

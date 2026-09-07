@@ -126,7 +126,7 @@ impl MarzBuilder {
     /// clamped to `0.0` (it still matches, contributing no score); only a
     /// non-finite boost throws.
     pub fn field(&mut self, name: &str, boost: Option<f64>) -> Result<(), JsValue> {
-        if name.is_empty() {
+        if name.trim().is_empty() {
             return Err(error("field name must not be empty"));
         }
         if name.contains('/') {
@@ -181,6 +181,9 @@ impl MarzBuilder {
                 self.ref_field
             ))
         })?;
+        if doc_ref.is_empty() {
+            return Err(error("document reference must not be empty"));
+        }
 
         let mut fields = HashMap::with_capacity(self.fields.len());
         for (name, _) in &self.fields {

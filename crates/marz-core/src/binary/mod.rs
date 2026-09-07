@@ -97,7 +97,9 @@
 //! `doc_count` and `document_count` are separate because they can differ:
 //! `doc_count` is how many distinct references were interned, while
 //! `document_count` is how many documents were added and is what BM25's IDF
-//! divides by. Adding the same reference twice increments only the latter.
+//! divides by. They are equal under the current upsert semantics (re-adding a
+//! reference replaces it without incrementing either); both fields are kept so
+//! the header layout stays stable if that ever changes.
 //!
 //! The number of dictionary blocks is not stored — it is
 //! `term_count.div_ceil(TERMS_PER_BLOCK)`, and deriving it removes a field that

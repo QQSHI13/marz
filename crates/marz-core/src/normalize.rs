@@ -65,6 +65,20 @@ pub fn normalize(text: &str) -> String {
     out.to_lowercase()
 }
 
+/// Normalize with the lowercasing rules of `code`.
+///
+/// Today only Turkish differs (`tr` needs dotless/dotted-I handling); every
+/// other code folds through [`normalize`]. Both the indexer and the query
+/// parser must use this same dispatch, or the two sides disagree on what
+/// `Istanbul` becomes and Turkish queries silently miss.
+pub fn normalize_for_language(code: &str, text: &str) -> String {
+    if code == "tr" {
+        normalize_tr(text)
+    } else {
+        normalize(text)
+    }
+}
+
 /// Normalize with Turkish dotless/dotted-I rules.
 ///
 /// Identical to [`normalize`] except the final lowercasing: `I` → `ı`
@@ -260,7 +274,16 @@ fn compose_semi_voiced(base: char) -> Option<char> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize;
+    use super::{normalize, normalize_for_language};
+
+    #[test]
+    fn turkish_folds_dotted_and_dotless_i() {
+        assert_eq!(normalize_for_language("tr", "Istanbul"), "ıstanbul");
+        assert_eq!(normalize_for_language("tr", "İZMİR"), "izmir");
+        // Every other language uses the default fold.
+        assert_eq!(normalize_for_language("en", "Istanbul"), "istanbul");
+        assert_eq!(normalize_for_language("de", "Istanbul"), "istanbul");
+    }
 
     #[test]
     fn folds_fullwidth_ascii() {

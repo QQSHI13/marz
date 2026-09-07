@@ -4,6 +4,11 @@
 //!
 //! Reports both serialization formats side by side, broken down by section, so a
 //! change to either one can be attributed to the part that moved.
+//!
+//! Requires the `json` cargo feature: without a JSON baseline there is nothing
+//! to compare the binary format against.
+
+#![cfg(feature = "json")]
 
 use std::collections::HashMap;
 use std::sync::Arc;

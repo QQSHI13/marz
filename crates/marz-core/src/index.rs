@@ -288,6 +288,10 @@ impl IndexBuilder {
     pub fn field(&mut self, name: impl Into<String>, boost: f64) -> &mut Self {
         let name = name.into();
         assert!(!name.is_empty(), "field name must not be empty");
+        debug_assert!(
+            name != self.ref_field,
+            "indexing the reference field inflates scores; the bindings reject this"
+        );
         assert!(
             !name.contains('/'),
             "field name {name:?} must not contain '/' (breaks FieldRef round-trip)"
@@ -336,6 +340,10 @@ impl IndexBuilder {
         F: FnMut(&str) -> Option<String>,
     {
         let doc_ref = doc_ref.into();
+        debug_assert!(
+            !doc_ref.is_empty(),
+            "empty document references are rejected at the binding boundary"
+        );
         let doc_boost = if doc_boost.is_finite() {
             doc_boost.max(0.0)
         } else {
@@ -495,7 +503,7 @@ impl Index {
     pub fn search(&self, query_string: &str) -> Result<Vec<SearchResult>, QueryParseError> {
         let language = self.pipeline.language();
         let separators = language.separator_chars();
-        let query = parse_query(query_string, &self.fields, separators)?;
+        let query = parse_query(query_string, &self.fields, separators, &language)?;
         Ok(self.execute_query(&query))
     }
 
@@ -572,18 +580,24 @@ impl Index {
     /// set (`foo*~1`): fuzzy+wildcard is not a defined combination, and scoring
     /// it as fuzzy would silently drop the wildcard. Documented here rather
     /// than rejected so `term*~N` keeps returning wildcard matches.
+    ///
+    /// Only unescaped stars count: an escaped `\*` is literal text. The exact
+    /// path unescapes (`a\*b` looks up indexed `a*b`); the wildcard decision
+    /// itself reads the raw clause text, whose retained backslashes still mark
+    /// escaped stars.
     fn expand_clause_term(
         &self,
         clause_term: &str,
         term: &str,
         edits: Option<usize>,
     ) -> Vec<String> {
-        if clause_term.contains('*') {
+        if crate::query::has_unescaped_wildcard(clause_term) {
             self.token_set.expand(term)
         } else if let Some(edits) = edits {
             self.token_set.expand_fuzzy(term, edits)
         } else {
-            self.token_set.expand(term)
+            self.token_set
+                .expand_exact(&crate::query::unescape_term(term))
         }
     }
 
@@ -1398,5 +1412,48 @@ mod tests {
         assert_eq!(index.document_count(), 1);
         assert!(index.search("green").unwrap().is_empty());
         assert_eq!(index.search("plumb").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn turkish_query_matches_turkish_indexing() {
+        use crate::languages::registry;
+        let tr = registry::resolve("tr").language;
+        let mut builder = IndexBuilder::new(tr);
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("d", 1.0, |_| Some("Istanbul".to_string()));
+        let index = builder.build();
+        for query in ["Istanbul", "ISTANBUL", "ıstanbul"] {
+            assert_eq!(
+                index.search(query).unwrap().len(),
+                1,
+                "query {query:?} must meet indexed ıstanbul"
+            );
+        }
+    }
+
+    #[test]
+    fn escaped_star_is_literal_not_wildcard() {
+        // `a\*b` must find only the literal term, while `a*` wildcard-matches
+        // everything starting with `a` — the two must not score identically.
+        // Korean has no stemmer, so the literal term survives indexing intact.
+        use crate::languages::Korean;
+        let ko: LanguageRef = std::sync::Arc::new(Korean);
+        let mut builder = IndexBuilder::new(ko);
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("star", 1.0, |_| Some("a*b test".to_string()));
+        builder.add("other", 1.0, |_| Some("axb test".to_string()));
+        let index = builder.build();
+        let literal = index.search(r"a\*b").unwrap();
+        assert_eq!(
+            literal.len(),
+            1,
+            "escaped star must match only the literal term"
+        );
+        assert_eq!(literal[0].ref_id, "star");
+        let wild = index.search("a*").unwrap();
+        assert!(
+            wild.len() > literal.len(),
+            "wildcard must match more than the literal"
+        );
     }
 }

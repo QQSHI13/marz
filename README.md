@@ -92,9 +92,11 @@ need it in the browser.
 ## Dependencies
 
 `marz-core` depends on `serde` and `serde_json`, and only for the legacy JSON
-index format — the binary format, the tokenizers, the Porter stemmer and the
-query parser are all hand-written with no dependencies. The stemmer is not
-regex-based, which is what keeps it out of the WASM bundle.
+index format behind the `json` cargo feature (on by default) — the binary
+format, the tokenizers, the Porter stemmer and the query parser are all
+hand-written with no dependencies. The browser bundle disables `json`, so
+searching ships no JSON parser. The stemmer is not regex-based, which is what
+keeps it out of the WASM bundle.
 
 ## Languages
 
@@ -103,7 +105,7 @@ regex-based, which is what keeps it out of the WASM bundle.
 | `en` | whitespace + punctuation | Porter, matching lunr.js |
 | `zh` | Han bigrams | none |
 | `ja` | Han/Kana bigrams | none |
-| `ko` | whitespace | none |
+| `ko` | Hangul/Hanja bigrams | none |
 | `th`, `lo`, `km`, `my`, `bo` | cluster bigrams (Thai, Lao, Khmer, Myanmar, Tibetan) | none |
 | 37× Snowball (`de`, `fr`, `ru`, …) | whitespace + punctuation | Snowball |
 | anything else (`vi`, `he`, `uk`, …) | whitespace + punctuation (generic fallback, warns) | none |
@@ -113,7 +115,8 @@ trimmed WASM builds advertise fewer codes by design.
 
 A single index can serve several languages at once via `MultiLanguage`, which
 dispatches per script — one index for a site with translated pages, rather than
-one per locale. Text is NFC-normalized and width-folded first, so fullwidth
+one per locale. Text is width-folded first (full-width to ASCII, half-width
+katakana to full-width — compatibility folding, not full NFC), so fullwidth
 `ＲＵＳＴ` is found by typing `rust` and halfwidth `ｶﾞｲﾄﾞ` by typing `ガイド`.
 
 ## Relationship to lunr

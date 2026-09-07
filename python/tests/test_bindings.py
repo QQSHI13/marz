@@ -577,6 +577,18 @@ class TestCjk:
         assert [hit.ref for hit in index.search("python")] == ["x"]
         assert [hit.ref for hit in index.search("検索")] == ["x"]
 
+    def test_turkish_queries_fold_like_turkish_indexing(self):
+        # `I` folds to `ı`, not `i`: every casing of the query must meet the
+        # indexed term.
+        builder = marz.IndexBuilder("tr")
+        builder.field("body")
+        builder.add({"id": "x", "body": "Istanbul"})
+        index = builder.build()
+        for query in ["Istanbul", "ISTANBUL", "ıstanbul"]:
+            assert [hit.ref for hit in index.search(query)] == ["x"]
+        assert marz.normalize("Istanbul", "tr") == "ıstanbul"
+        assert marz.normalize("Istanbul") == "istanbul"
+
 
 class TestNormalize:
     def test_normalize_folds_width_and_case(self):

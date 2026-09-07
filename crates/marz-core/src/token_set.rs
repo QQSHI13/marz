@@ -82,6 +82,18 @@ impl TokenSet {
         }
     }
 
+    /// Exact lookup that never treats `*` as a wildcard.
+    ///
+    /// Needed for escaped stars (`a\*b` unescapes to `a*b`, which `expand`
+    /// would re-read as a pattern). Returns the term itself iff indexed.
+    pub fn expand_exact(&self, term: &str) -> Vec<String> {
+        if self.contains(term) {
+            vec![term.to_string()]
+        } else {
+            Vec::new()
+        }
+    }
+
     fn contains(&self, term: &str) -> bool {
         let mut node = &self.root;
         for ch in term.chars() {

@@ -1,3 +1,6 @@
+//! JSON round-trip tests. Requires the `json` cargo feature.
+#![cfg(feature = "json")]
+
 use std::sync::Arc;
 
 use marz_core::languages::English;

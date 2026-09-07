@@ -6,16 +6,19 @@
 //! * `+term` — required term
 //! * `-term` — prohibited term
 //! * `field:term` — field-scoped term
-//! * `term^N` — boost (float, e.g. `^2.5`)
-//! * `term~N` — fuzzy edit distance
-//! * backslash escaping for special characters
+//! * `term^N` — boost (float, e.g. `^2.5`, exponent, e.g. `^1e3`;
+//!   non-negative — `^-1` is a parse error, while a programmatically built
+//!   negative boost clamps to `0.0`)
+//! * `term~N` — fuzzy edit distance (non-negative integer)
+//! * backslash escaping for special characters (`\*` is literal, not a wildcard)
 //!
 //! `start`/`end` on [`QueryParseError`] and lexemes are **character** offsets
 //! into the query string, not byte offsets: slicing `query.as_bytes()` with
 //! them panics on multibyte input. Slice with `query.chars()` or convert via
 //! `char_indices`.
 
-use crate::normalize::normalize;
+use crate::language::LanguageRef;
+use crate::normalize::normalize_for_language;
 use crate::query::{Clause, Presence, Query};
 
 /// Error produced when a query string cannot be parsed.
@@ -56,6 +59,12 @@ struct Lexeme {
     str: String,
     start: usize,
     end: usize,
+    /// Whether the lexeme contains an unescaped `*`.
+    ///
+    /// Escaped stars (`\*`) are literal text: the backslash is retained in
+    /// `str` (see `slice_string`) and this stays false, so an escaped star
+    /// neither disables the pipeline nor triggers wildcard expansion.
+    wildcard: bool,
 }
 
 /// Lexer for lunr query syntax.
@@ -66,6 +75,11 @@ struct QueryLexer<'a> {
     pos: usize,
     start: usize,
     escape_positions: Vec<usize>,
+    /// Whether the lexeme currently being scanned contains an unescaped `*`.
+    ///
+    /// Set only for stars that reach the `lex_text` loop body: stars consumed
+    /// by `escape_character` (i.e. `\` + `*`) never get here. Reset on `emit`.
+    bare_star: bool,
 }
 
 impl<'a> QueryLexer<'a> {
@@ -77,6 +91,7 @@ impl<'a> QueryLexer<'a> {
             pos: 0,
             start: 0,
             escape_positions: Vec::new(),
+            bare_star: false,
         }
     }
 
@@ -107,6 +122,14 @@ impl<'a> QueryLexer<'a> {
                 continue;
             }
             sub_slices.extend(self.chars[slice_start..escape_pos].iter().copied());
+            // An escaped `*` is literal text, not a wildcard — but stripping
+            // the backslash would make it indistinguishable from a real one
+            // downstream (`contains('*')` can't tell them apart). Retain the
+            // backslash; expansion strips `\` + `*` back to a literal star for
+            // exact lookup. All other escapes are still removed.
+            if self.chars.get(escape_pos + 1) == Some(&'*') {
+                sub_slices.push('\\');
+            }
             slice_start = escape_pos + 1;
         }
         sub_slices.extend(
@@ -121,11 +144,14 @@ impl<'a> QueryLexer<'a> {
 
     fn emit(&mut self, type_: LexemeType) {
         let str = self.slice_string();
+        let wildcard = self.bare_star;
+        self.bare_star = false;
         self.lexemes.push(Lexeme {
             type_,
             str,
             start: self.start,
             end: self.pos,
+            wildcard,
         });
         self.start = self.pos;
     }
@@ -177,8 +203,10 @@ impl<'a> QueryLexer<'a> {
 
     fn accept_number_run(&mut self) {
         // Boosts are floats (`term^2.5`), not just integers. Accept digits and
-        // at most one `.`; the final `parse::<f64>` still rejects garbage like
-        // `^..` with a proper `QueryParseError` instead of silently lexing `^2`.
+        // at most one `.`, plus an optional exponent (`^1e3`); the final
+        // `parse::<f64>` still rejects garbage like `^..` with a proper
+        // `QueryParseError` instead of silently lexing `^2` or splitting
+        // `^1e3` into a boost plus a dead `e3` clause.
         let mut seen_dot = false;
         while let Some(ch) = self.next() {
             if ch.is_ascii_digit() {
@@ -188,9 +216,37 @@ impl<'a> QueryLexer<'a> {
                 seen_dot = true;
                 continue;
             }
+            if (ch == 'e' || ch == 'E') && self.accept_exponent() {
+                continue;
+            }
             self.backup();
             break;
         }
+    }
+
+    /// Try to consume an exponent tail (`e3`, `E-2`) at the current position.
+    ///
+    /// Returns whether one was consumed. On failure the position is restored
+    /// to before the `e`, so the caller backs up onto it as usual.
+    fn accept_exponent(&mut self) -> bool {
+        let save = self.pos;
+        if let Some(sign) = self.next() {
+            if sign != '+' && sign != '-' {
+                self.backup();
+            }
+        }
+        let digits_start = self.pos;
+        while let Some(ch) = self.next() {
+            if !ch.is_ascii_digit() {
+                self.backup();
+                break;
+            }
+        }
+        if self.pos > digits_start {
+            return true;
+        }
+        self.pos = save;
+        false
     }
 
     fn more(&self) -> bool {
@@ -211,6 +267,12 @@ impl<'a> QueryLexer<'a> {
             if ch == '\\' {
                 self.escape_character();
                 continue;
+            }
+
+            // An unescaped `*` makes this lexeme a wildcard (recorded on
+            // `emit`). Stars consumed by `escape_character` never reach here.
+            if ch == '*' {
+                self.bare_star = true;
             }
 
             if ch == ':' {
@@ -302,14 +364,22 @@ pub struct QueryParser<'a> {
     lexemes: Vec<Lexeme>,
     lexeme_idx: usize,
     current_clause: Clause,
+    language: LanguageRef,
 }
 
 impl<'a> QueryParser<'a> {
     /// Create a parser for `query_string` that will append clauses to `query`.
     ///
     /// `separators` is the set of characters that split query terms and should
-    /// match the tokenizer of the target language.
-    pub fn new(query_string: &str, query: &'a mut Query, separators: &str) -> Self {
+    /// match the tokenizer of the target language. `language` selects the
+    /// query-side normalization, which must agree with indexing — Turkish is
+    /// the case that matters (`I` folds to `ı`, not `i`).
+    pub fn new(
+        query_string: &str,
+        query: &'a mut Query,
+        separators: &str,
+        language: &LanguageRef,
+    ) -> Self {
         let mut lexer = QueryLexer::new(query_string, separators);
         lexer.run();
         Self {
@@ -317,6 +387,7 @@ impl<'a> QueryParser<'a> {
             lexemes: lexer.lexemes,
             lexeme_idx: 0,
             current_clause: Clause::default(),
+            language: language.clone(),
         }
     }
 
@@ -457,12 +528,15 @@ impl<'a> QueryParser<'a> {
                 end: 0,
             })?;
 
-        // Normalize (width-fold + lowercase) so `ＲＵＳＴ*` and `ｶﾞｲﾄﾞ*` match
-        // what the indexer stored. `normalize` leaves `*` untouched, so wildcard
-        // patterns survive. `use_pipeline` is set centrally in
-        // `Query::clause` (wildcard disables the pipeline); do not duplicate it
-        // here.
-        self.current_clause.term = normalize(&lexeme.str);
+        // Normalize with the language's own rules (Turkish folds `I` to `ı`,
+        // not `i`) so the query side agrees with what the indexer stored.
+        // Normalization leaves `*` — and the `\` retained before an escaped
+        // star — untouched, so wildcard patterns survive. `use_pipeline` is
+        // set centrally in `Query::clause`; do not duplicate it here.
+        self.current_clause.term = normalize_for_language(self.language.code(), &lexeme.str);
+        // Only an unescaped star is a wildcard. An escaped `\*` stays literal
+        // text for exact lookup (its backslash is stripped at expansion).
+        self.current_clause.has_wildcard = lexeme.wildcard;
 
         let Some(next) = self.peek_lexeme() else {
             self.next_clause();
@@ -588,13 +662,15 @@ enum ParseState {
 ///
 /// `separators` defines which characters split query terms and should match the
 /// language tokenizer (see [`Language::separator_chars`](crate::language::Language)).
+/// `language` selects query-side normalization, which must agree with indexing.
 pub fn parse_query(
     query_string: &str,
     all_fields: &[String],
     separators: &str,
+    language: &LanguageRef,
 ) -> Result<Query, QueryParseError> {
     let mut query = Query::new(all_fields.to_vec());
-    let parser = QueryParser::new(query_string, &mut query, separators);
+    let parser = QueryParser::new(query_string, &mut query, separators, language);
     parser.parse()?;
     Ok(query)
 }
@@ -602,6 +678,12 @@ pub fn parse_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::languages::English;
+    use std::sync::Arc;
+
+    fn lang() -> LanguageRef {
+        Arc::new(English)
+    }
 
     fn fields() -> Vec<String> {
         vec!["title".to_string(), "body".to_string()]
@@ -613,7 +695,7 @@ mod tests {
 
     #[test]
     fn parse_simple_term() {
-        let q = parse_query("hello", &fields(), sep()).unwrap();
+        let q = parse_query("hello", &fields(), sep(), &lang()).unwrap();
         assert_eq!(q.clauses.len(), 1);
         assert_eq!(q.clauses[0].term, "hello");
         assert_eq!(q.clauses[0].fields, fields());
@@ -621,21 +703,28 @@ mod tests {
 
     #[test]
     fn parse_field_scope() {
-        let q = parse_query("title:hello", &fields(), sep()).unwrap();
+        let q = parse_query("title:hello", &fields(), sep(), &lang()).unwrap();
         assert_eq!(q.clauses[0].fields, vec!["title"]);
         assert_eq!(q.clauses[0].term, "hello");
     }
 
     #[test]
     fn parse_boost_and_edit_distance() {
-        let q = parse_query("hello^3~2", &fields(), sep()).unwrap();
+        let q = parse_query("hello^3~2", &fields(), sep(), &lang()).unwrap();
         assert_eq!(q.clauses[0].boost, 3.0);
         assert_eq!(q.clauses[0].edit_distance, Some(2));
     }
 
     #[test]
+    fn parse_exponent_boost() {
+        let q = parse_query("hello^1e3", &fields(), sep(), &lang()).unwrap();
+        assert_eq!(q.clauses.len(), 1);
+        assert_eq!(q.clauses[0].boost, 1000.0);
+    }
+
+    #[test]
     fn parse_presence_modifiers() {
-        let q = parse_query("+foo -bar baz", &fields(), sep()).unwrap();
+        let q = parse_query("+foo -bar baz", &fields(), sep(), &lang()).unwrap();
         assert_eq!(q.clauses[0].presence, Presence::Required);
         assert_eq!(q.clauses[1].presence, Presence::Prohibited);
         assert_eq!(q.clauses[2].presence, Presence::Optional);
@@ -643,14 +732,39 @@ mod tests {
 
     #[test]
     fn parse_wildcard() {
-        let q = parse_query("foo*", &fields(), sep()).unwrap();
+        let q = parse_query("foo*", &fields(), sep(), &lang()).unwrap();
         assert_eq!(q.clauses[0].term, "foo*");
+        assert!(q.clauses[0].has_wildcard);
         assert!(!q.clauses[0].use_pipeline);
     }
 
     #[test]
+    fn escaped_star_is_literal_not_wildcard() {
+        let q = parse_query(r"foo\*", &fields(), sep(), &lang()).unwrap();
+        assert_eq!(q.clauses.len(), 1);
+        assert!(!q.clauses[0].has_wildcard);
+        assert!(q.clauses[0].use_pipeline);
+    }
+
+    #[test]
+    fn trailing_backslash_is_literal() {
+        let q = parse_query("foo\\", &fields(), sep(), &lang()).unwrap();
+        assert_eq!(q.clauses.len(), 1);
+        assert_eq!(q.clauses[0].term, "foo\\");
+    }
+
+    #[test]
     fn reject_unknown_field() {
-        let err = parse_query("unknown:x", &fields(), sep()).unwrap_err();
+        let err = parse_query("unknown:x", &fields(), sep(), &lang()).unwrap_err();
         assert!(err.message.contains("unrecognised field"));
+    }
+
+    #[test]
+    fn turkish_query_folds_like_turkish_indexing() {
+        // `I` must become `ı`, matching `normalize_tr` at index time — the
+        // default fold (`i`) would never meet the indexed term.
+        let tr = crate::languages::registry::resolve("tr").language;
+        let q = parse_query("Istanbul", &fields(), sep(), &tr).unwrap();
+        assert_eq!(q.clauses[0].term, "ıstanbul");
     }
 }

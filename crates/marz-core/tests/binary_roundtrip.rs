@@ -13,7 +13,9 @@
 
 use std::sync::Arc;
 
-use marz_core::binary::{BinaryIndex, FormatError};
+use marz_core::binary::BinaryIndex;
+#[cfg(feature = "json")]
+use marz_core::binary::FormatError;
 use marz_core::languages::{English, Japanese, Korean};
 use marz_core::{Index, IndexBuilder, Language};
 
@@ -243,6 +245,7 @@ fn positions_free_index_scores_the_same_but_loses_positions() {
 }
 
 #[test]
+#[cfg(feature = "json")]
 fn binary_is_substantially_smaller_than_json() {
     // The whole justification for the format. Measured on CJK text, where the
     // JSON overhead is worst.
@@ -274,6 +277,7 @@ fn document_refs_with_slashes_survive() {
 }
 
 #[test]
+#[cfg(feature = "json")]
 fn reading_a_json_index_as_binary_fails_cleanly() {
     // A likely real mistake: a build script that swapped the two formats. It
     // must produce a clear error, not a garbled index.

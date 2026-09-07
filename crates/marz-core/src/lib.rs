@@ -3,9 +3,9 @@
 //! A dependency-light offline search index with first-class CJK support,
 //! achieved with n-gram tokenization rather than a segmentation dictionary.
 //!
-//! An index can be serialized as JSON, or as the compact zero-copy [`binary`]
-//! format, which is roughly a fifth of the size and can be read straight from a
-//! memory-mapped file.
+//! An index can be serialized as JSON (with the `json` cargo feature, on by
+//! default), or as the compact zero-copy [`binary`] format, which is roughly
+//! a fifth of the size and can be read straight from a memory-mapped file.
 
 #![warn(missing_docs)]
 
@@ -26,7 +26,7 @@ pub mod tokenizer;
 /// Re-export core types.
 pub use binary::BinaryIndex;
 pub use index::{Index, IndexBuilder, MatchData, SearchResult};
-pub use language::Language;
+pub use language::{Language, MultiLanguage};
 pub use query::Query;
 pub use token::Token;
 
