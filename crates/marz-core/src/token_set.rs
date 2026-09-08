@@ -11,23 +11,37 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// A node in the token trie.
+/// A node in the token trie, addressed by arena index.
+///
+/// Nodes live in `TokenSet::nodes` and edges store indices, never references
+/// or pointers: the trie is built by mutation (`insert` pushes nodes) and read
+/// by iterative walks carrying indices on explicit stacks. Nothing aliases,
+/// so there is no `unsafe` anywhere in this module.
 #[derive(Default)]
 struct Node {
     final_: bool,
-    edges: HashMap<char, Node>,
+    edges: HashMap<char, usize>,
 }
 
 /// A set of tokens represented as a trie, used to expand wildcard terms.
-#[derive(Default)]
 pub struct TokenSet {
-    root: Node,
+    /// Arena of trie nodes; index `0` is always the root.
+    nodes: Vec<Node>,
+}
+
+impl Default for TokenSet {
+    /// An empty token set. Same as [`TokenSet::new`].
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TokenSet {
     /// Create an empty token set.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            nodes: vec![Node::default()],
+        }
     }
 
     /// Build a token set from a sorted list of terms.
@@ -54,11 +68,19 @@ impl TokenSet {
 
     /// Insert a term into the set.
     pub fn insert(&mut self, term: &str) {
-        let mut node = &mut self.root;
+        let mut idx = 0;
         for ch in term.chars() {
-            node = node.edges.entry(ch).or_default();
+            let next = if let Some(&child) = self.nodes[idx].edges.get(&ch) {
+                child
+            } else {
+                let child = self.nodes.len();
+                self.nodes.push(Node::default());
+                self.nodes[idx].edges.insert(ch, child);
+                child
+            };
+            idx = next;
         }
-        node.final_ = true;
+        self.nodes[idx].final_ = true;
     }
 
     /// Expand a query term. Exact terms return themselves if present.
@@ -73,7 +95,7 @@ impl TokenSet {
                 visited: HashSet::new(),
                 results: Vec::new(),
             };
-            walk.run(&self.root);
+            walk.run(&self.nodes);
             walk.results
         } else if self.contains(term) {
             vec![term.to_string()]
@@ -95,14 +117,14 @@ impl TokenSet {
     }
 
     fn contains(&self, term: &str) -> bool {
-        let mut node = &self.root;
+        let mut idx = 0;
         for ch in term.chars() {
-            match node.edges.get(&ch) {
-                Some(n) => node = n,
+            match self.nodes[idx].edges.get(&ch) {
+                Some(&child) => idx = child,
                 None => return false,
             }
         }
-        node.final_
+        self.nodes[idx].final_
     }
 
     /// Expand a query term by edit distance, counting a transposition as one
@@ -162,7 +184,7 @@ impl TokenSet {
             max_edits,
             results: Vec::new(),
         };
-        walk.run(&self.root, &initial);
+        walk.run(&self.nodes, &initial);
         walk.results
     }
 }
@@ -182,14 +204,14 @@ fn collapse_stars(pattern: &str) -> String {
 /// State for one wildcard expansion.
 struct WildcardWalk {
     pattern: Vec<char>,
-    /// `(node address, pattern position)` pairs already expanded.
+    /// `(node index, pattern position)` pairs already expanded.
     visited: HashSet<(usize, usize)>,
     results: Vec<String>,
 }
 
 impl WildcardWalk {
-    /// Match `pattern[at..]` against the subtree at `node`, whose path from the
-    /// root spells `prefix`.
+    /// Match `pattern[at..]` against the subtree at `nodes[node]`, whose path
+    /// from the root spells `prefix`.
     ///
     /// # Why the visited set is needed
     ///
@@ -207,15 +229,11 @@ impl WildcardWalk {
     ///
     /// Iterative with an explicit stack: a 10k-character spaceless token
     /// (URL, minified JS) would otherwise recurse 10k deep and overflow.
-    fn run(&mut self, root: &Node) {
-        // (node pointer as usize is safe: `root` outlives the walk and nodes
-        // are never moved while borrowed through `&`.)
-        let mut stack: Vec<(*const Node, usize, String)> =
-            vec![(root as *const Node, 0, String::new())];
-        while let Some((ptr, at, prefix)) = stack.pop() {
-            // SAFETY: `ptr` comes from a live `&Node` ancestor of `root`.
-            let node: &Node = unsafe { &*ptr };
-            if !self.visited.insert((ptr as usize, at)) {
+    fn run(&mut self, nodes: &[Node]) {
+        let mut stack: Vec<(usize, usize, String)> = vec![(0, 0, String::new())];
+        while let Some((idx, at, prefix)) = stack.pop() {
+            let node = &nodes[idx];
+            if !self.visited.insert((idx, at)) {
                 continue;
             }
             if at == self.pattern.len() {
@@ -225,46 +243,16 @@ impl WildcardWalk {
                 continue;
             }
             if self.pattern[at] == '*' {
-                stack.push((ptr, at + 1, prefix.clone()));
-                for (edge_ch, edge_node) in &node.edges {
+                stack.push((idx, at + 1, prefix.clone()));
+                for (edge_ch, child) in &node.edges {
                     let mut extended = prefix.clone();
                     extended.push(*edge_ch);
-                    stack.push((edge_node as *const Node, at, extended));
+                    stack.push((*child, at, extended));
                 }
-            } else if let Some(edge_node) = node.edges.get(&self.pattern[at]) {
+            } else if let Some(child) = node.edges.get(&self.pattern[at]) {
                 let mut extended = prefix;
                 extended.push(self.pattern[at]);
-                stack.push((edge_node as *const Node, at + 1, extended));
-            }
-        }
-    }
-
-    /// Recursive entry kept for tests/docs; delegates to [`Self::run`].
-    #[allow(dead_code)]
-    fn visit(&mut self, node: &Node, at: usize, prefix: String) {
-        let mut stack = vec![(node as *const Node, at, prefix)];
-        while let Some((ptr, at, prefix)) = stack.pop() {
-            let node: &Node = unsafe { &*ptr };
-            if !self.visited.insert((ptr as usize, at)) {
-                continue;
-            }
-            if at == self.pattern.len() {
-                if node.final_ {
-                    self.results.push(prefix);
-                }
-                continue;
-            }
-            if self.pattern[at] == '*' {
-                stack.push((ptr, at + 1, prefix.clone()));
-                for (edge_ch, edge_node) in &node.edges {
-                    let mut extended = prefix.clone();
-                    extended.push(*edge_ch);
-                    stack.push((edge_node as *const Node, at, extended));
-                }
-            } else if let Some(edge_node) = node.edges.get(&self.pattern[at]) {
-                let mut extended = prefix;
-                extended.push(self.pattern[at]);
-                stack.push((edge_node as *const Node, at + 1, extended));
+                stack.push((*child, at + 1, extended));
             }
         }
     }
@@ -282,16 +270,9 @@ struct FuzzyWalk<'a> {
     results: Vec<String>,
 }
 
-/// One entry of the fuzzy-walk stack: node, prefix, edit row, row minimum,
-///
-/// parent row + char for the transposition rule.
-type FuzzyStackEntry = (
-    *const Node,
-    String,
-    Vec<usize>,
-    usize,
-    Option<(Vec<usize>, char)>,
-);
+/// One entry of the fuzzy-walk stack: node index, prefix, edit row, row
+/// minimum, parent row + char for the transposition rule.
+type FuzzyStackEntry = (usize, String, Vec<usize>, usize, Option<(Vec<usize>, char)>);
 
 impl FuzzyWalk<'_> {
     /// Iterative trie walk carrying one edit-matrix row per stack entry.
@@ -300,50 +281,33 @@ impl FuzzyWalk<'_> {
     /// Each stack entry also carries its row's minimum so pruning does not
     /// re-scan the full row (`O(pattern)` per node) on top of the `O(pattern)`
     /// row computation.
-    fn run(&mut self, root: &Node, initial: &[usize]) {
+    fn run(&mut self, nodes: &[Node], initial: &[usize]) {
         let init_min = *initial.iter().min().unwrap_or(&usize::MAX);
         // Parent row is cloned only along the current path (small budgets keep
         // rows short); the common case prunes early.
-        let mut stack: Vec<FuzzyStackEntry> = vec![(
-            root as *const Node,
-            String::new(),
-            initial.to_vec(),
-            init_min,
-            None,
-        )];
-        while let Some((ptr, prefix, current, current_min, previous)) = stack.pop() {
-            // SAFETY: pointers derive from live `&Node`s under `root`.
-            let node: &Node = unsafe { &*ptr };
+        let mut stack: Vec<FuzzyStackEntry> =
+            vec![(0, String::new(), initial.to_vec(), init_min, None)];
+        while let Some((idx, prefix, current, current_min, previous)) = stack.pop() {
+            let node = &nodes[idx];
             if node.final_ && current[self.pattern.len()] <= self.max_edits {
                 self.results.push(prefix.clone());
             }
             if current_min > self.max_edits {
                 continue;
             }
-            for (edge_ch, edge_node) in &node.edges {
+            for (edge_ch, child) in &node.edges {
                 let prev_ref = previous.as_ref().map(|(r, c)| (r.as_slice(), *c));
                 let (next, next_min) = self.next_row_with_min(*edge_ch, &current, prev_ref);
                 let mut new_prefix = prefix.clone();
                 new_prefix.push(*edge_ch);
                 let parent = Some((current.clone(), *edge_ch));
-                stack.push((edge_node as *const Node, new_prefix, next, next_min, parent));
+                stack.push((*child, new_prefix, next, next_min, parent));
             }
         }
     }
 
-    /// Same as [`Self::next_row_with_min`] without the minimum, kept for tests.
-    #[allow(dead_code)]
-    fn next_row(
-        &self,
-        edge_ch: char,
-        current: &[usize],
-        previous: Option<(&[usize], char)>,
-    ) -> Vec<usize> {
-        self.next_row_with_min(edge_ch, current, previous).0
-    }
-
-    /// Same as [`Self::next_row`] plus the row minimum for pruning without a
-    /// second scan.
+    /// Edit-matrix row for the candidate extended by `edge_ch`, plus the row
+    /// minimum for pruning without a second scan.
     fn next_row_with_min(
         &self,
         edge_ch: char,

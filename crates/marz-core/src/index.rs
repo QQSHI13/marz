@@ -15,9 +15,10 @@
 //!   `f64` weights. Measured on Chinese Wikipedia text they were a flat
 //!   16% of the serialized index, and their cost grows with the corpus.
 //!   Query-time scoring stores one `u32` term frequency per posting instead.
-//! * **Correctness under boosts.** A precomputed weight bakes in the field
-//!   boost and document boost that were configured at build time, so the same
-//!   index cannot be re-queried with different boosts.
+//! * **Boosts.** Field and document boosts configured at build time are still
+//!   baked in — same as lunr. What query-time scoring buys is that the
+//!   *clause* boost (`term^N`) applies at search time, so one index serves
+//!   differently-weighted queries without rebuilding.
 //! * **Zero-copy.** A sparse `f64` vector per document-field cannot be read
 //!   from a memory-mapped byte slice without allocating. Term frequencies and
 //!   field lengths can.
@@ -224,6 +225,12 @@ struct Stats {
 }
 
 /// Index builder.
+///
+/// Holds the full inverted index in memory: comfortable into the tens of
+/// thousands of documents (the docs-site scale this engine targets), not
+/// millions. Staged documents are owned twice over (once staged, once
+/// indexed), and re-adding a reference scans every posting list, so bulk
+/// loads should prefer fresh references over upserts.
 pub struct IndexBuilder {
     language: LanguageRef,
     ref_field: String,

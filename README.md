@@ -44,14 +44,15 @@ nothing to be wrong about.
 Bigrams alone over-match: a document containing 検索 and エンジン separately
 matches a query for 検索エンジン. So Marz records term positions and verifies
 adjacency at query time, which **boosts** a real phrase match rather than
-filtering the partial one. A document with the phrase scores roughly two orders
-of magnitude above one with the pieces scattered — it sorts to the top, and the
-partial hit stays available instead of vanishing. Filtering would make a CJK
-query behave as AND while the same query in English behaves as OR, which is a
-worse surprise than a low-ranked extra result.
+filtering the partial one. Each boosted phrase term scores double, so a
+document with the phrase sorts well above one with the pieces scattered —
+while the partial hit stays available instead of vanishing. Filtering would
+make a CJK query behave as AND while the same query in English behaves as OR,
+which is a worse surprise than a low-ranked extra result.
 
-Korean is written with spaces, so it is tokenized on whitespace. Forcing bigrams
-on a language that does not need them would only cost index size.
+Korean mixes Hangul syllables with spaces and occasional Hanja, so it is
+bigrammed like Japanese (Hangul and Han runs); whitespace alone would leave
+unspaced Hangul compounds unfindable.
 
 ## Numbers
 
@@ -68,9 +69,10 @@ are illustrative (toolchain and corpus dependent) and not pinned by CI — see
 
 The binary format is read in place. `BinaryIndex::open` validates the header and
 computes section bounds in **~330 ns regardless of corpus size** — postings are
-decoded from the buffer as queries ask for them. Parsing the equivalent JSON
-takes ~112 ms at 5,000 documents, and materializing the whole binary index into
-owned structures takes ~52 ms. Dropping positions costs highlighting and phrase
+decoded from the buffer as queries ask for them. Materializing the whole binary
+index into owned structures takes ~52 ms. (The browser build loads that way:
+`MarzIndex.load` materializes rather than memory-mapping, so budget one load
+per page.) Dropping positions costs highlighting and phrase
 verification.
 
 Search cost tracks how many documents match, not how many exist. A selective

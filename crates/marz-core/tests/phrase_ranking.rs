@@ -214,3 +214,30 @@ fn phrase_verification_respects_field_scope() {
         "a phrase spanning two fields must not verify"
     );
 }
+
+#[test]
+fn verified_phrase_beats_truly_scattered_bigrams_by_a_margin() {
+    // Order alone is a weak signal: the classic decoy (エンジンオイル…)
+    // still contains contiguous エンジン, so both sides verify and the gap
+    // is length-norm noise. A decoy whose bigrams never align must score
+    // clearly lower — each boosted phrase term scores double.
+    let index = index(
+        Arc::new(Japanese),
+        &[
+            ("phrase", "検索エンジンについて"),
+            ("spaced", "検索 エン ンジ ジン について"),
+        ],
+    );
+
+    let results = index.search("検索エンジン").unwrap();
+    assert_eq!(results.len(), 2);
+    let (first, second) = (&results[0], &results[1]);
+    assert_eq!(first.ref_id, "phrase");
+    assert_eq!(second.ref_id, "spaced");
+    assert!(
+        first.score > 1.5 * second.score,
+        "phrase {} must clearly beat scattered {}",
+        first.score,
+        second.score
+    );
+}
