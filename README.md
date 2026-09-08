@@ -91,12 +91,10 @@ need it in the browser.
 
 ## Dependencies
 
-`marz-core` depends on `serde` and `serde_json`, and only for the legacy JSON
-index format behind the `json` cargo feature (on by default) — the binary
-format, the tokenizers, the Porter stemmer and the query parser are all
-hand-written with no dependencies. The browser bundle disables `json`, so
-searching ships no JSON parser. The stemmer is not regex-based, which is what
-keeps it out of the WASM bundle.
+`marz-core` has no dependencies: the binary format, the tokenizers, the Porter
+stemmer and the query parser are all hand-written. The stemmer is not
+regex-based, which is what keeps it out of the WASM bundle. (`serde` and
+`serde_json` appear only in dev-dependencies, for reading test fixtures.)
 
 ## Languages
 

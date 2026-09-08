@@ -180,12 +180,11 @@ jobs:
           raw=$(stat -c %s js/pkg/marz_wasm_bg.wasm)
           gz=$(gzip -9 -c js/pkg/marz_wasm_bg.wasm | wc -c)
           echo "wasm: $raw bytes raw, $gz bytes gzipped" >> "$GITHUB_STEP_SUMMARY"
-          # 550,449 raw as of the serde_json feature-gating (Sep 2026): the
-          # floor moved with toolchain drift and 37 stemmers, not with anything
-          # anyone did wrong. Headroom is ~25KB: enough for dependency float,
-          # tight enough to still catch a silently unoptimized build, which
-          # costs tens of KB at this size. Raise it and update the README
-          # together.
+          # 550,449 raw as of Sep 2026: the floor moved with toolchain drift
+          # and 37 stemmers, not with anything anyone did wrong. ~25KB of
+          # headroom tolerates dependency float while still catching a
+          # silently unoptimized build, which costs tens of KB at this size.
+          # Raise it and update the README together.
           limit=575000
           if [ "$raw" -gt "$limit" ]; then
             echo "::error::wasm is $raw bytes, over the $limit byte limit." \

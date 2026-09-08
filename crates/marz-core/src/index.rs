@@ -29,9 +29,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-#[cfg(feature = "json")]
-use serde::{Deserialize, Serialize};
-
 use crate::language::LanguageRef;
 use crate::phrase::{extract_phrases, Phrase, VerificationCache, PHRASE_BOOST};
 use crate::pipeline::Pipeline;
@@ -39,18 +36,6 @@ use crate::query::{Presence, Query};
 use crate::query_parser::{parse_query, QueryParseError};
 use crate::token_set::TokenSet;
 use crate::{bm25_weight, idf};
-
-/// Marz index serialization format version.
-///
-/// This is Marz's own format version and is unrelated to any lunr version.
-/// Marz indexes are not interchangeable with lunr indexes: the CJK
-/// tokenization differs, and the scoring data is stored as term frequencies
-/// rather than precomputed field vectors.
-///
-/// Only compiled with the `json` cargo feature, which is the sole reader of
-/// the version string.
-#[cfg(feature = "json")]
-const INDEX_VERSION: &str = "3";
 
 /// A reference to one field of one document.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -801,190 +786,9 @@ impl Index {
         refs.into_iter().collect()
     }
 
-    /// Serialize the index to a JSON string.
-    ///
-    /// Deterministic: inner maps are sorted by field name and doc ref so two
-    /// builds of the same corpus produce byte-identical JSON.
-    ///
-    /// Only available with the `json` cargo feature (on by default). The
-    /// browser bundle disables it: searching reads the binary format.
-    #[cfg(feature = "json")]
-    pub fn to_json(&self) -> String {
-        let inverted_index: Vec<(String, SerializedPosting)> = self
-            .inverted_index
-            .iter()
-            .map(|(term, posting)| {
-                let mut field_names: Vec<&String> = posting
-                    .fields
-                    .iter()
-                    .filter(|(_, docs)| !docs.is_empty())
-                    .map(|(field_name, _)| field_name)
-                    .collect();
-                field_names.sort();
-                let fields: std::collections::BTreeMap<_, _> = field_names
-                    .into_iter()
-                    .map(|field_name| {
-                        let docs_map = &posting.fields[field_name];
-                        let mut doc_refs: Vec<&String> = docs_map.keys().collect();
-                        doc_refs.sort();
-                        let docs: std::collections::BTreeMap<_, _> = doc_refs
-                            .into_iter()
-                            .map(|doc_ref| {
-                                let posting_doc = &docs_map[doc_ref];
-                                (
-                                    doc_ref.clone(),
-                                    SerializedPostingDoc {
-                                        term_frequency: posting_doc.term_frequency,
-                                        positions: posting_doc.positions.clone(),
-                                    },
-                                )
-                            })
-                            .collect();
-                        (field_name.clone(), docs)
-                    })
-                    .collect();
-                (term.clone(), SerializedPosting { fields })
-            })
-            .collect();
-
-        let mut field_lengths: Vec<(String, usize)> = Vec::new();
-        for (doc_ref, fields) in &self.stats.field_lengths {
-            for (field_name, len) in fields {
-                field_lengths.push((FieldRef::new(doc_ref, field_name).to_string(), *len));
-            }
-        }
-        field_lengths.sort();
-
-        let mut doc_boosts: Vec<(String, f64)> = self
-            .stats
-            .doc_boosts
-            .iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect();
-        doc_boosts.sort_by(|a, b| a.0.cmp(&b.0));
-
-        let serialized = SerializedIndex {
-            version: INDEX_VERSION.to_string(),
-            language: self.pipeline.language().code().to_string(),
-            fields: self.fields.clone(),
-            field_boosts: self
-                .fields
-                .iter()
-                .map(|f| self.stats.field_boosts.get(f).copied().unwrap_or(1.0))
-                .collect(),
-            document_count: self.stats.document_count,
-            k1: self.stats.k1,
-            b: self.stats.b,
-            field_lengths,
-            doc_boosts,
-            inverted_index,
-            pipeline: self.pipeline.labels(),
-        };
-
-        serde_json::to_string(&serialized).expect("index serialization")
-    }
-
-    /// Load a previously serialized index.
-    ///
-    /// The `language` must match the tokenizer/pipeline used to build the index.
-    /// A version mismatch or a language mismatch is rejected rather than
-    /// silently producing wrong rankings.
-    ///
-    /// Only available with the `json` cargo feature (on by default).
-    #[cfg(feature = "json")]
-    pub fn load(json: &str, language: LanguageRef) -> Result<Self, serde_json::Error> {
-        let serialized: SerializedIndex = serde_json::from_str(json)?;
-
-        if serialized.version != INDEX_VERSION {
-            return Err(serde::de::Error::custom(format!(
-                "index version {:?} is not supported (this build reads {:?})",
-                serialized.version, INDEX_VERSION
-            )));
-        }
-        if serialized.language != language.code() {
-            return Err(serde::de::Error::custom(format!(
-                "index was built for language {:?}, not {:?}",
-                serialized.language,
-                language.code()
-            )));
-        }
-
-        let mut inverted_index: BTreeMap<String, Posting> = BTreeMap::new();
-        for (term, sp) in serialized.inverted_index {
-            let mut posting = Posting::default();
-            for (field_name, docs) in sp.fields {
-                let doc_map = docs
-                    .into_iter()
-                    .map(|(doc_ref, spd)| {
-                        // Fall back to the position count when the term
-                        // frequency is absent, so an index written without it
-                        // still scores correctly.
-                        let term_frequency = if spd.term_frequency > 0 {
-                            spd.term_frequency
-                        } else {
-                            spd.positions.len().max(1) as u32
-                        };
-                        (
-                            doc_ref,
-                            PostingDoc {
-                                term_frequency,
-                                positions: spd.positions,
-                            },
-                        )
-                    })
-                    .collect();
-                posting.fields.insert(field_name, doc_map);
-            }
-            inverted_index.insert(term, posting);
-        }
-
-        let mut field_lengths: HashMap<String, HashMap<String, usize>> = HashMap::new();
-        for (key, len) in serialized.field_lengths {
-            if let Some(fr) = FieldRef::from_string(&key) {
-                field_lengths
-                    .entry(fr.doc_ref().to_string())
-                    .or_default()
-                    .insert(fr.field_name().to_string(), len);
-            }
-        }
-
-        let field_boosts = serialized
-            .fields
-            .iter()
-            .cloned()
-            .zip(
-                serialized
-                    .field_boosts
-                    .iter()
-                    .copied()
-                    .chain(std::iter::repeat(1.0)),
-            )
-            .collect();
-
-        let stats = Stats {
-            document_count: serialized.document_count,
-            average_field_lengths: average_field_lengths(&field_lengths, &serialized.fields),
-            field_lengths,
-            field_boosts,
-            doc_boosts: serialized.doc_boosts.into_iter().collect(),
-            k1: serialized.k1,
-            b: serialized.b,
-        };
-
-        let token_set = TokenSet::from_strs(inverted_index.keys().map(String::as_str));
-
-        Ok(Index {
-            inverted_index,
-            token_set,
-            fields: serialized.fields,
-            stats,
-            pipeline: Pipeline::new(language),
-        })
-    }
-
     /// Serialize the index to the compact binary format.
     ///
-    /// Roughly a fifth the size of `Index::to_json` output. Pass
+    /// Roughly a fifth of the equivalent lunr-style JSON. Pass
     /// `include_positions = false` to drop highlighting and CJK phrase
     /// verification data for a further saving of about a tenth.
     pub fn to_binary(&self, include_positions: bool) -> Vec<u8> {
@@ -1005,8 +809,8 @@ impl Index {
 
     /// Load an index from the binary format.
     ///
-    /// This materializes the postings into the same in-memory structures
-    /// `Index::load` builds, so search behaves identically. It is the
+    /// This materializes the postings into owned in-memory structures, so
+    /// search behaves the same as on a freshly built index. It is the
     /// convenient path, not the zero-copy one — use [`crate::BinaryIndex`]
     /// directly to read postings straight out of a mapped buffer.
     ///
@@ -1166,59 +970,6 @@ fn average_field_lengths(
             (name.clone(), avg)
         })
         .collect()
-}
-
-/// Serialized index format.
-///
-/// Only compiled with the `json` cargo feature.
-#[cfg(feature = "json")]
-#[derive(Serialize, Deserialize)]
-struct SerializedIndex {
-    version: String,
-    language: String,
-    fields: Vec<String>,
-    #[serde(rename = "fieldBoosts", default)]
-    field_boosts: Vec<f64>,
-    #[serde(rename = "documentCount")]
-    document_count: usize,
-    k1: f64,
-    b: f64,
-    /// `fieldName/docRef` -> token count.
-    #[serde(rename = "fieldLengths")]
-    field_lengths: Vec<(String, usize)>,
-    #[serde(rename = "docBoosts", default)]
-    doc_boosts: Vec<(String, f64)>,
-    #[serde(rename = "invertedIndex")]
-    inverted_index: Vec<(String, SerializedPosting)>,
-    pipeline: Vec<String>,
-}
-
-/// Serialized posting for a single term.
-///
-/// `BTreeMap`s, not `HashMap`s: serde emits map keys in iteration order, so
-/// hash maps would make identical indexes serialize to different bytes on
-/// every build. Docsforge-style pipelines rely on byte-reproducible output.
-#[cfg(feature = "json")]
-#[derive(Serialize, Deserialize)]
-struct SerializedPosting {
-    #[serde(flatten)]
-    fields: std::collections::BTreeMap<
-        String,
-        std::collections::BTreeMap<String, SerializedPostingDoc>,
-    >,
-}
-
-/// Serialized per-document posting data.
-///
-/// Both fields default, so a posting written without positions (a positions-free
-/// index) or without an explicit term frequency still deserializes.
-#[cfg(feature = "json")]
-#[derive(Serialize, Deserialize)]
-struct SerializedPostingDoc {
-    #[serde(rename = "tf", default)]
-    term_frequency: u32,
-    #[serde(rename = "p", default, skip_serializing_if = "Vec::is_empty")]
-    positions: Vec<(usize, usize)>,
 }
 
 #[cfg(test)]

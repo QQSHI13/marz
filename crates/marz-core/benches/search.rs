@@ -251,20 +251,9 @@ fn bench_load(c: &mut Criterion) {
         let index = build_index(&english_docs(size), Arc::new(English));
         group.throughput(Throughput::Elements(size as u64));
 
-        // The reason the binary format exists. Measured beside the JSON it
-        // replaced, because "loads in N ms" is only meaningful next to what it
-        // used to cost — and JSON parsing is what a lunr-style index pays on
-        // every page load.
-        #[cfg(feature = "json")]
-        let json = index.to_json();
-        #[cfg(feature = "json")]
-        group.bench_with_input(BenchmarkId::new("json", size), &json, |b, json| {
-            b.iter(|| Index::load(black_box(json), Arc::new(English)).unwrap());
-        });
-
         // `from_binary` materializes the postings into the same structures
-        // `load` builds, so this measures parsing without JSON's cost — the
-        // convenience path, and still O(index size).
+        // a fresh build holds, so this measures parsing without any text
+        // format cost — the convenience path, and still O(index size).
         let binary = index.to_binary(true);
         group.bench_with_input(
             BenchmarkId::new("binary/materialize", size),
@@ -334,8 +323,6 @@ fn bench_serialize(c: &mut Criterion) {
     let mut group = c.benchmark_group("serialize");
 
     let index = build_index(&english_docs(5_000), Arc::new(English));
-    #[cfg(feature = "json")]
-    group.bench_function("json", |b| b.iter(|| black_box(&index).to_json()));
     group.bench_function("binary", |b| b.iter(|| black_box(&index).to_binary(true)));
     group.bench_function("binary/no-positions", |b| {
         b.iter(|| black_box(&index).to_binary(false))

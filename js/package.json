@@ -1,6 +1,6 @@
 {
   "name": "marz-search",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Offline search with first-class CJK support, no segmentation dictionary.",
   "type": "module",
   "sideEffects": false,

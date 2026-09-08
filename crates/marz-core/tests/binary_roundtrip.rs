@@ -14,8 +14,6 @@
 use std::sync::Arc;
 
 use marz_core::binary::BinaryIndex;
-#[cfg(feature = "json")]
-use marz_core::binary::FormatError;
 use marz_core::languages::{English, Japanese, Korean};
 use marz_core::{Index, IndexBuilder, Language};
 
@@ -245,20 +243,6 @@ fn positions_free_index_scores_the_same_but_loses_positions() {
 }
 
 #[test]
-#[cfg(feature = "json")]
-fn binary_is_substantially_smaller_than_json() {
-    // The whole justification for the format. Measured on CJK text, where the
-    // JSON overhead is worst.
-    let index = build(Arc::new(Japanese), JA_DOCS);
-    let json = index.to_json().len();
-    let binary = index.to_binary(true).len();
-    assert!(
-        binary * 2 < json,
-        "binary {binary} B should be under half of JSON {json} B"
-    );
-}
-
-#[test]
 fn document_refs_with_slashes_survive() {
     // The JSON format's `fieldName/docRef` key needed careful parsing to handle
     // these. The binary format interns references whole, so there is nothing to
@@ -274,20 +258,6 @@ fn document_refs_with_slashes_survive() {
     let mut expected: Vec<&str> = EN_DOCS.iter().map(|(id, _, _)| *id).collect();
     expected.sort_unstable();
     assert_eq!(refs, expected);
-}
-
-#[test]
-#[cfg(feature = "json")]
-fn reading_a_json_index_as_binary_fails_cleanly() {
-    // A likely real mistake: a build script that swapped the two formats. It
-    // must produce a clear error, not a garbled index.
-    let index = build(Arc::new(English), EN_DOCS);
-    let json = index.to_json();
-    assert!(matches!(
-        BinaryIndex::open(json.as_bytes()),
-        Err(FormatError::BadMagic(_))
-    ));
-    assert!(Index::from_binary(json.as_bytes(), Arc::new(English)).is_err());
 }
 
 #[test]

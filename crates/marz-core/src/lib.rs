@@ -3,9 +3,9 @@
 //! A dependency-light offline search index with first-class CJK support,
 //! achieved with n-gram tokenization rather than a segmentation dictionary.
 //!
-//! An index can be serialized as JSON (with the `json` cargo feature, on by
-//! default), or as the compact zero-copy [`binary`] format, which is roughly
-//! a fifth of the size and can be read straight from a memory-mapped file.
+//! An index serializes to the compact zero-copy [`binary`] format, which is
+//! roughly a fifth of the size of a lunr-style JSON index and can be read
+//! straight from a memory-mapped file.
 
 #![warn(missing_docs)]
 

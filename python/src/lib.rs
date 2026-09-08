@@ -484,15 +484,6 @@ impl Index {
         PyBytes::new(py, &bytes)
     }
 
-    /// Serialize to JSON.
-    ///
-    /// Roughly five times the size of `to_bytes()`. Kept for callers migrating
-    /// from a JSON index; prefer `to_bytes()` for anything shipped.
-    fn to_json(&self, py: Python<'_>) -> String {
-        let index = self.inner.clone();
-        py.detach(move || index.to_json())
-    }
-
     /// Read an index from `to_bytes()` output.
     ///
     /// `language` must match the language it was built with — the index stores
@@ -533,35 +524,6 @@ impl Index {
         Ok(Self {
             inner: Arc::new(index),
             language_code: stored,
-        })
-    }
-
-    /// Read an index from `to_json()` output.
-    #[staticmethod]
-    fn from_json(py: Python<'_>, data: &Bound<'_, PyAny>, language: &str) -> PyResult<Self> {
-        // Accept `str` or UTF-8 `bytes`: callers holding `Path.read_bytes()`
-        // should not have to decode first.
-        let json: String = if let Ok(s) = data.extract::<&str>() {
-            s.to_string()
-        } else if let Ok(b) = data.extract::<&[u8]>() {
-            std::str::from_utf8(b)
-                .map_err(|e| FormatError::new_err(format!("not a Marz index: {e}")))?
-                .to_string()
-        } else {
-            return Err(PyTypeError::new_err("data must be str or bytes"));
-        };
-        // Silent resolve like `from_bytes`: stored fallback codes (`vi`, …)
-        // are legitimate working indexes, and surrounding whitespace is not a
-        // different language. A mismatch against the stored code still raises
-        // below via `CoreIndex::load`.
-        let code = language.trim().to_string();
-        let lang = language_for_load(&code);
-        let index = py
-            .detach(move || CoreIndex::load(&json, lang))
-            .map_err(|e| FormatError::new_err(format!("not a Marz index: {e}")))?;
-        Ok(Self {
-            inner: Arc::new(index),
-            language_code: code,
         })
     }
 

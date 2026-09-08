@@ -347,17 +347,6 @@ class TestSerialization:
         after = [(h.ref, h.score) for h in restored.search("search engine")]
         assert before == after
 
-    def test_json_roundtrip_preserves_refs_and_scores(self):
-        original = build()
-        restored = marz.Index.from_json(original.to_json(), "en")
-        before = [(h.ref, h.score) for h in original.search("search engine")]
-        after = [(h.ref, h.score) for h in restored.search("search engine")]
-        assert before == after
-
-    def test_binary_is_much_smaller_than_json(self):
-        index = build(JA_DOCS, "ja")
-        assert len(index.to_bytes()) < len(index.to_json().encode())
-
     def test_dropping_positions_shrinks_the_index(self):
         index = build(JA_DOCS, "ja")
         assert len(index.to_bytes(positions=False)) < len(index.to_bytes())
@@ -397,10 +386,6 @@ class TestSerialization:
 
     def test_format_error_is_a_value_error(self):
         assert issubclass(marz.FormatError, ValueError)
-
-    def test_malformed_json_raises_value_error(self):
-        with pytest.raises(ValueError, match="not a Marz index"):
-            marz.Index.from_json("{}", "en")
 
 
 class TestIndexAccessors:
