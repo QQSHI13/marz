@@ -564,6 +564,14 @@ impl<'a> BinaryIndex<'a> {
         let positions_base = cursor.read_u32()?;
         let document_frequency = cursor.read_u32()?;
         let field_count = cursor.read_usize()?;
+        // Every field costs at least its id varint: a count exceeding the
+        // remaining bytes is corrupt, and `Vec::with_capacity` below would
+        // abort on the huge allocation rather than error.
+        if field_count > slice.len() {
+            return Err(FormatError::Truncated {
+                section: "postings",
+            });
+        }
 
         let mut fields = Vec::with_capacity(field_count);
         let mut positions_offset = positions_base;
@@ -573,6 +581,12 @@ impl<'a> BinaryIndex<'a> {
                 return Err(FormatError::InvalidFieldId(field_id));
             }
             let entry_count = cursor.read_usize()?;
+            // Same: every entry costs at least its doc-delta varint.
+            if entry_count > slice.len() {
+                return Err(FormatError::Truncated {
+                    section: "postings",
+                });
+            }
             let mut entries = Vec::with_capacity(entry_count);
             let mut doc_id = 0u32;
             for _ in 0..entry_count {
@@ -620,6 +634,12 @@ impl<'a> BinaryIndex<'a> {
             .ok_or(FormatError::Truncated {
                 section: "positions",
             })?;
+        // Every position costs at least its delta varint.
+        if (count as usize) > slice.len() {
+            return Err(FormatError::Truncated {
+                section: "positions",
+            });
+        }
         let mut cursor = Cursor::new(slice, "positions");
         let uniform_length = cursor.read_usize()?;
         let per_position = if uniform_length == 0 { 2 } else { 1 };
@@ -648,6 +668,14 @@ impl<'a> BinaryIndex<'a> {
                 .ok_or(FormatError::Truncated {
                     section: "positions",
                 })?;
+        // Every position costs at least its delta varint: a count exceeding
+        // the remaining bytes is corrupt, and `Vec::with_capacity` below
+        // would abort on the huge allocation rather than error.
+        if (entry.position_count as usize) > slice.len() {
+            return Err(FormatError::Truncated {
+                section: "positions",
+            });
+        }
         let mut cursor = Cursor::new(slice, "positions");
         let uniform_length = cursor.read_usize()?;
 
@@ -1019,6 +1047,62 @@ mod tests {
             BinaryIndex::open(&bytes),
             Err(FormatError::SectionsNotOrdered { .. })
         ));
+    }
+
+    /// Encode `value` as a varint (test-only; mirrors `varint::write_varint`).
+    fn encode_varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return out;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    #[test]
+    fn absurd_counts_are_rejected_not_allocated() {
+        // A corrupt `u32::MAX` count must error, not abort in
+        // `Vec::with_capacity` (tens of GB) or hang the decode loop. Splice
+        // one into the first posting list: positions_base, df, field_count
+        // and the first field_id are single-byte varints in this fixture, so
+        // entry_count sits at postings base + 4.
+        let fixture = fixture();
+        let bytes = write_index(&fixture.snapshot());
+        let index = BinaryIndex::open(&bytes).unwrap();
+        let base = index.header().postings_offset as usize;
+
+        for offset in [base + 2, base + 4] {
+            let mut corrupt = bytes.clone();
+            let wide = encode_varint(u64::from(u32::MAX));
+            corrupt.splice(offset..offset + 1, wide);
+            let index = BinaryIndex::open(&corrupt).unwrap();
+            assert!(
+                index.postings(0).is_err(),
+                "count at postings+{} must fail, not abort",
+                offset - base
+            );
+        }
+    }
+
+    #[test]
+    fn absurd_position_count_is_rejected_not_allocated() {
+        // Forged entry: a real offset into a real positions section, but a
+        // count no buffer could hold. Must error, not attempt a 64 GB
+        // allocation.
+        let fixture = fixture();
+        let bytes = write_index(&fixture.snapshot());
+        let index = BinaryIndex::open(&bytes).unwrap();
+        let postings = index.postings(0).unwrap();
+        let entry = postings.fields[0].entries[0];
+        let forged = PostingEntry {
+            position_count: u32::MAX,
+            ..entry
+        };
+        assert!(index.positions(&forged).is_err());
     }
 
     #[test]

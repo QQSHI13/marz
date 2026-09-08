@@ -134,6 +134,12 @@ impl Query {
         if clause.fields.is_empty() {
             clause.fields = self.all_fields.clone();
         }
+        // An empty term matches nothing. Guard before wildcard insertion:
+        // auto-adding `*` would turn it into a match-all.
+        if clause.term.is_empty() {
+            self.clauses.push(clause);
+            return self;
+        }
         // A negative boost is meaningless — it would subtract from the score
         // and let a matching document rank below a non-matching one. Clamp it.
         // Non-finite falls back to 1.0 like field and document boosts: an
@@ -165,13 +171,15 @@ impl Query {
 
         // A programmatically built term never passes the lexer, so derive the
         // wildcard flag here (the parser sets it from the lexeme instead).
-        // Escaped stars stay literal: only unescaped `*` counts.
-        if has_unescaped_wildcard(&clause.term) {
-            clause.has_wildcard = true;
-        }
+        // Assigned, not OR-ed: a stale `true` with no `*` in the term would
+        // force the pipeline off and miss stemmed matches. Escaped stars stay
+        // literal: only unescaped `*` counts.
+        clause.has_wildcard = has_unescaped_wildcard(&clause.term);
 
-        // Wildcards disable the search pipeline.
-        if clause.has_wildcard {
+        // Wildcards disable the search pipeline. So do escaped stars: the
+        // literal text (`hello` in `hello\*`) must not be stemmed or trimmed
+        // into a false positive — expansion looks the raw text up exactly.
+        if clause.has_wildcard || clause.term.contains("\\*") {
             clause.use_pipeline = false;
         }
 

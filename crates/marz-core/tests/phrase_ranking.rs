@@ -241,3 +241,27 @@ fn verified_phrase_beats_truly_scattered_bigrams_by_a_margin() {
         second.score
     );
 }
+
+#[test]
+fn phrase_verdicts_do_not_leak_across_clauses() {
+    // Phrase indices restart at 0 per clause, so the verification cache must
+    // too: sharing one cache lets clause N's verdict answer for clause M's
+    // same-indexed phrase. Here A verifies and B does not; both clause orders
+    // must score identically, and the scattered-only query lower than boosted.
+    let index = index(
+        Arc::new(Japanese),
+        &[("d", "機械学習と人工の話と工知の話と知能の話について")],
+    );
+
+    let both = |q: &str| index.search(q).unwrap()[0].score;
+    // Approximate: clause scores sum in order, so float association differs
+    // in the last ulp. A cache leak would move the total by whole boosts.
+    assert!(
+        (both("機械学習 人工知能") - both("人工知能 機械学習")).abs() < 1e-9,
+        "clause order must not change the score"
+    );
+    assert!(
+        both("機械学習") > both("人工知能"),
+        "verified phrase must outscore scattered bigrams"
+    );
+}

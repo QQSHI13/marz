@@ -216,7 +216,8 @@ impl<'a> QueryLexer<'a> {
                 seen_dot = true;
                 continue;
             }
-            if (ch == 'e' || ch == 'E') && self.accept_exponent() {
+            if ch == 'e' || ch == 'E' {
+                self.accept_exponent();
                 continue;
             }
             self.backup();
@@ -226,27 +227,23 @@ impl<'a> QueryLexer<'a> {
 
     /// Try to consume an exponent tail (`e3`, `E-2`) at the current position.
     ///
-    /// Returns whether one was consumed. On failure the position is restored
-    /// to before the `e`, so the caller backs up onto it as usual.
-    fn accept_exponent(&mut self) -> bool {
-        let save = self.pos;
+    /// The caller has already consumed the `e`. Whatever follows becomes part
+    /// of the boost lexeme — even garbage: `^1e` lexes as boost `"1e"`, which
+    /// `parse` rejects with "boost must be numeric". Failing open instead
+    /// (rewinding onto the `e`) would silently split the query into a boost
+    /// plus a phantom `e` clause that outranks real matches.
+    fn accept_exponent(&mut self) {
         if let Some(sign) = self.next() {
             if sign != '+' && sign != '-' {
                 self.backup();
             }
         }
-        let digits_start = self.pos;
         while let Some(ch) = self.next() {
             if !ch.is_ascii_digit() {
                 self.backup();
                 break;
             }
         }
-        if self.pos > digits_start {
-            return true;
-        }
-        self.pos = save;
-        false
     }
 
     fn more(&self) -> bool {
@@ -743,7 +740,9 @@ mod tests {
         let q = parse_query(r"foo\*", &fields(), sep(), &lang()).unwrap();
         assert_eq!(q.clauses.len(), 1);
         assert!(!q.clauses[0].has_wildcard);
-        assert!(q.clauses[0].use_pipeline);
+        // Bypassed as a literal (like wildcards bypass stemming): the
+        // pipeline would trim `foo\*` into a false-positive `foo`.
+        assert!(!q.clauses[0].use_pipeline);
     }
 
     #[test]

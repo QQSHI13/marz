@@ -240,6 +240,18 @@ pub enum FormatError {
         /// Language the index was built with.
         found: String,
     },
+    /// An index was loaded with a language whose analysis pipeline does not
+    /// match the one recorded at build time.
+    ///
+    /// Same language code, different text processing — e.g. a trimmed build
+    /// whose stemmer was compiled out. Query terms would never meet indexed
+    /// terms, surfacing as empty results rather than an error.
+    PipelineMismatch {
+        /// Pipeline stages the caller's language runs.
+        expected: Vec<String>,
+        /// Pipeline stages recorded in the index header.
+        found: Vec<String>,
+    },
     /// A front-coded term declared a shared prefix longer than the term it
     /// shares with.
     InvalidSharedPrefix {
@@ -290,6 +302,10 @@ impl std::fmt::Display for FormatError {
             Self::LanguageMismatch { expected, found } => write!(
                 f,
                 "index was built for language {found:?}, not {expected:?}"
+            ),
+            Self::PipelineMismatch { expected, found } => write!(
+                f,
+                "index was built with pipeline {found:?}, not {expected:?}"
             ),
             Self::InvalidSharedPrefix { shared, available } => write!(
                 f,

@@ -198,7 +198,7 @@ impl IndexBuilder {
         Ok(Self {
             language_code: language.trim().to_string(),
             language: language_for(py, language)?,
-            ref_field: ref_field.to_string(),
+            ref_field: ref_field.trim().to_string(),
             fields: Vec::new(),
             docs: Vec::new(),
             k1,
@@ -212,9 +212,13 @@ impl IndexBuilder {
     /// reads the fields declared at the time it is called. A negative `boost`
     /// is clamped to `0.0` (it still matches, contributing no score); only a
     /// non-finite boost raises.
+    ///
+    /// Surrounding whitespace is not part of a name: it is trimmed before
+    /// storing, so `field(" title ")` and `title:q` meet.
     #[pyo3(signature = (name, boost = 1.0))]
     fn field(&mut self, name: &str, boost: f64) -> PyResult<()> {
-        if name.trim().is_empty() {
+        let name = name.trim();
+        if name.is_empty() {
             return Err(PyValueError::new_err("field name must not be empty"));
         }
         if name.contains('/') {
@@ -503,7 +507,9 @@ impl Index {
             .language()
             .to_string();
         if let Some(requested) = language {
-            if requested != stored {
+            // Trimmed: builders store trimmed codes, WASM compares trimmed —
+            // padding is not a different language on any boundary.
+            if requested.trim() != stored {
                 return Err(FormatError::new_err(format!(
                     "index was built for language {stored:?}, not {requested:?}"
                 )));

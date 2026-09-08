@@ -637,11 +637,14 @@ impl Index {
         let mut required: Option<HashSet<&str>> = None;
         let mut prohibited: HashSet<&str> = HashSet::new();
         let mut matched_any = false;
-        // Phrase verification is per (phrase, field, document) but is consulted
-        // once per phrase *term*, so the verdict is cached.
-        let mut phrase_cache = VerificationCache::default();
 
         for clause in &query.clauses {
+            // Phrase verification is per (clause phrase, field, document) but
+            // is consulted once per phrase *term*, so the verdict is cached
+            // within the clause. The cache lives inside the loop deliberately:
+            // phrase indices restart at 0 per clause, so sharing one cache
+            // across clauses lets clause N's verdict leak into clause M.
+            let mut phrase_cache = VerificationCache::default();
             // Phrases are derived from the pipeline's tokens, so they are only
             // available when the pipeline ran. A wildcard clause disables it,
             // and a wildcard is an explicit request for loose matching anyway.
@@ -823,6 +826,8 @@ impl Index {
     ///
     /// The `language` must match the one the index was built with; a mismatch
     /// makes query tokenization disagree with the indexed terms and is rejected.
+    /// The recorded analysis pipeline must agree too: same code, different
+    /// stemming (e.g. a trimmed build) fails the same way.
     pub fn from_binary(
         bytes: &[u8],
         language: LanguageRef,
@@ -833,6 +838,18 @@ impl Index {
             return Err(crate::binary::FormatError::LanguageMismatch {
                 expected: language.code().to_string(),
                 found: binary.language().to_string(),
+            });
+        }
+
+        let expected_pipeline: Vec<String> = language
+            .pipeline_labels()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        if binary.pipeline() != expected_pipeline.as_slice() {
+            return Err(crate::binary::FormatError::PipelineMismatch {
+                expected: expected_pipeline,
+                found: binary.pipeline().to_vec(),
             });
         }
 
@@ -1213,5 +1230,26 @@ mod tests {
             wild.len() > literal.len(),
             "wildcard must match more than the literal"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "de")]
+    fn from_binary_rejects_a_different_pipeline() {
+        // Same code, different stemming: full Snowball German vs the generic
+        // fallback a trimmed build resolves it to. Must fail loudly — the
+        // alternative is empty results with no error.
+        use crate::languages::Generic;
+
+        let stemmed = crate::languages::registry::resolve("de").language;
+        let mut builder = IndexBuilder::new(stemmed);
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("d", 1.0, |_| Some("suchmaschinen".to_string()));
+        let bytes = builder.build().to_binary(true);
+
+        let unstemmed: LanguageRef = std::sync::Arc::new(Generic::new("de"));
+        assert!(matches!(
+            Index::from_binary(&bytes, unstemmed),
+            Err(crate::binary::FormatError::PipelineMismatch { .. })
+        ));
     }
 }

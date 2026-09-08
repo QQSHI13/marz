@@ -127,7 +127,10 @@ impl Language for SnowballLanguage {
     }
 
     fn pipeline_labels(&self) -> Vec<&'static str> {
-        vec!["trimmer", "stopWordFilter", "stemmer"]
+        // The code rides along so `from_binary` can tell a real stemmer from a
+        // trimmed build's silent fallback: same code, different stemming must
+        // fail loudly rather than rank silently wrong.
+        vec!["trimmer", "stopWordFilter", "stemmer", self.code]
     }
 }
 

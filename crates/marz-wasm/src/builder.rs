@@ -95,6 +95,7 @@ impl MarzBuilder {
         if ref_field.trim().is_empty() {
             return Err(error("refField must not be empty"));
         }
+        let ref_field = ref_field.trim().to_string();
         let k1 = match k1 {
             Some(v) if v.is_finite() && v >= 0.0 => v,
             // Clamp philosophy, matching the core and Python bindings: a
@@ -125,8 +126,12 @@ impl MarzBuilder {
     /// only the fields declared when it is called. A negative `boost` is
     /// clamped to `0.0` (it still matches, contributing no score); only a
     /// non-finite boost throws.
+    ///
+    /// Surrounding whitespace is not part of a name: it is trimmed before
+    /// storing, so `field(" title ")` and `title:q` meet.
     pub fn field(&mut self, name: &str, boost: Option<f64>) -> Result<(), JsValue> {
-        if name.trim().is_empty() {
+        let name = name.trim();
+        if name.is_empty() {
             return Err(error("field name must not be empty"));
         }
         if name.contains('/') {
