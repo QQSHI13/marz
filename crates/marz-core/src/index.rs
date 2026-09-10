@@ -278,12 +278,13 @@ impl IndexBuilder {
     /// duplicates with an error instead — same outcome for well-formed
     /// configurations, louder for mistakes.
     ///
-    /// Panics on an empty name, one containing `/`, or one containing a
-    /// separator character: a `/` breaks `FieldRef` round-tripping, an empty
-    /// name is always a configuration bug, and a name the query lexer would
-    /// split (spaces and the language's separators) is unrepresentable in
-    /// `field:term` syntax, so declaring it can only build an unqueryable
-    /// field. Failing fast beats a silently corrupt index.
+    /// Panics on an empty name, one containing `/`, one containing a
+    /// separator character, or one containing a query operator (`:` `^` `~`
+    /// `\`, or leading `+`/`-`): a `/` breaks `FieldRef` round-tripping, an
+    /// empty name is always a configuration bug, and a name the query lexer
+    /// would split is unrepresentable in `field:term` syntax, so declaring it
+    /// can only build an unqueryable field. Failing fast beats a silently
+    /// corrupt index.
     /// Non-finite boosts fall back to `1.0`; negative boosts clamp to `0.0`
     /// (they still match, contributing no score).
     pub fn field(&mut self, name: impl Into<String>, boost: f64) -> &mut Self {
@@ -294,6 +295,12 @@ impl IndexBuilder {
                 .chars()
                 .any(|c| c.is_whitespace() || self.language.separator_chars().contains(c)),
             "field name {name:?} contains a separator and is unqueryable"
+        );
+        assert!(
+            !name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
+                && !matches!(name.chars().next(), Some('+' | '-')),
+            "field name {name:?} contains a query operator and is unqueryable \
+             via field:term syntax"
         );
         assert!(
             !name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
@@ -600,8 +607,7 @@ impl Index {
     fn bypass_terms(language: &LanguageRef, raw: &str) -> Vec<String> {
         let code = language.code();
         let mut out = vec![normalize_for_language(code, raw)];
-        let multi_with_tr = code.contains(',') && code.split(',').any(|c| c.trim() == "tr");
-        if multi_with_tr {
+        if crate::normalize::uses_raw_passthrough(code) {
             let turkish = normalize_tr(raw);
             if turkish != out[0] {
                 out.push(turkish);
@@ -1393,6 +1399,51 @@ mod tests {
     }
 
     #[test]
+    fn programmatic_wildcard_folds_like_parsed() {
+        // `Query::term("HELLO*")` must behave exactly like `search("HELLO*"):
+        // the bypass path folds raw terms instead of trusting their case.
+        let mut builder = IndexBuilder::new(en());
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("a", 1.0, |_| Some("hello world".to_string()));
+        let index = builder.build();
+        assert_eq!(index.search("HELLO*").unwrap().len(), 1);
+        let mut query = Query::new(vec!["body".to_string()]);
+        query.term("HELLO*");
+        assert_eq!(index.query(&query).len(), 1);
+    }
+
+    #[test]
+    fn multi_turkish_wildcard_covers_both_folds() {
+        // `ISTANBUL*` must meet `ıstanbul` (Turkish fold); `HELLO*` meets
+        // `hello` (default fold). One bypass, two folds, unioned.
+        use crate::languages::registry;
+        let multi = registry::resolve_multi("en,tr").language;
+        let mut builder = IndexBuilder::new(multi);
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("en-doc", 1.0, |_| Some("hello world".to_string()));
+        builder.add("tr-doc", 1.0, |_| Some("Istanbul".to_string()));
+        let index = builder.build();
+        assert_eq!(
+            index
+                .search("HELLO*")
+                .unwrap()
+                .iter()
+                .map(|h| &h.ref_id)
+                .collect::<Vec<_>>(),
+            ["en-doc"]
+        );
+        assert_eq!(
+            index
+                .search("ISTANBUL*")
+                .unwrap()
+                .iter()
+                .map(|h| &h.ref_id)
+                .collect::<Vec<_>>(),
+            ["tr-doc"]
+        );
+    }
+
+    #[test]
     fn empty_term_matches_nothing() {
         use crate::query::{Clause, Query};
         let index = test_index();
@@ -1415,5 +1466,11 @@ mod tests {
     #[should_panic(expected = "must not contain '/'")]
     fn slash_field_name_panics() {
         IndexBuilder::new(en()).field("a/b", 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "query operator")]
+    fn operator_field_name_panics() {
+        IndexBuilder::new(en()).field("a:b", 1.0);
     }
 }

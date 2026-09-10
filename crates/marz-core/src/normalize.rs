@@ -68,28 +68,31 @@ pub fn normalize(text: &str) -> String {
 /// Normalize with the lowercasing rules of `code`.
 ///
 /// Today only Turkish differs (`tr` needs dotless/dotted-I handling); every
-/// other code folds through [`normalize`]. Both the indexer and the query
-/// parser must use this same dispatch, or the two sides disagree on what
-/// `Istanbul` becomes and Turkish queries silently miss.
+/// other code — including multi-language codes — folds through [`normalize`].
+/// Both the indexer and the query parser must use this same dispatch, or the
+/// two sides disagree on what `Istanbul` becomes and Turkish queries silently
+/// miss.
 ///
-/// A multi-language code containing `tr` (`en,tr`) folds nothing at all: each
-/// member's tokenizer folds its own way at index time, and any global fold
-/// here could only destroy information one member needs (`I` → `i` loses
-/// `ı`). Single `tr` still folds Turkish.
+/// One exception: the query parser skips this global fold for multi-language
+/// codes containing `tr` (see `uses_raw_passthrough`), because no single
+/// folding serves both members — each member's tokenizer folds its own way,
+/// and the bypass paths union both folds instead.
 pub fn normalize_for_language(code: &str, text: &str) -> String {
-    let members: Vec<&str> = code
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect();
-    if members.len() > 1 && members.contains(&"tr") {
-        return text.to_string();
-    }
     if code.trim() == "tr" {
         normalize_tr(text)
     } else {
         normalize(text)
     }
+}
+
+/// Whether queries in `code` must skip the global fold and let each member
+/// tokenizer fold for itself.
+///
+/// Only multi-language codes containing Turkish qualify: any global fold
+/// destroys information one member needs (`I` → `i` loses `ı`), while every
+/// other combination folds identically everywhere.
+pub fn uses_raw_passthrough(code: &str) -> bool {
+    code.contains(',') && code.split(',').any(|c| c.trim() == "tr")
 }
 
 /// Lowercase with Turkish dotless/dotted-I rules: `I` → `ı`, `İ` → `i`.

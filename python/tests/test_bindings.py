@@ -109,6 +109,21 @@ class TestBuilder:
         with pytest.warns(UserWarning, match="engish in"):
             marz.IndexBuilder("en,engish")
 
+    @pytest.mark.parametrize("name", ["a:b", "a^b", "a~b", "a\\b", "+a", "-a", "a b"])
+    def test_operator_field_names_are_rejected(self, name):
+        builder = marz.IndexBuilder("en")
+        with pytest.raises(ValueError, match="unqueryable|must not"):
+            builder.field(name)
+
+    def test_multi_turkish_wildcard_covers_both_folds(self):
+        builder = marz.IndexBuilder("en,tr")
+        builder.field("body")
+        builder.add({"id": "en-doc", "body": "hello world"})
+        builder.add({"id": "tr-doc", "body": "Istanbul"})
+        index = builder.build()
+        assert [h.ref for h in index.search("HELLO*")] == ["en-doc"]
+        assert [h.ref for h in index.search("ISTANBUL*")] == ["tr-doc"]
+
     def test_documents_need_a_field_to_be_indexed_into(self):
         builder = marz.IndexBuilder("en")
         with pytest.raises(ValueError, match="declare at least one field"):

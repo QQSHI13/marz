@@ -508,11 +508,18 @@ impl<'a> QueryParser<'a> {
 
         // Normalize with the language's own rules (Turkish folds `I` to `ı`,
         // not `i`) so the query side agrees with what the indexer stored.
+        // Multi-language codes containing Turkish skip the global fold: no
+        // single folding serves both members, so each member's tokenizer
+        // folds for itself downstream (and the bypass paths union both).
         // Normalization leaves `*` — and the `\` retained before an escaped
         // star — untouched, so wildcard patterns survive. Wildcard detection
         // happens centrally in `Query::clause` from the text itself, so there
         // is exactly one rule and no flag to drift from the string.
-        self.current_clause.term = normalize_for_language(self.language.code(), &lexeme.str);
+        self.current_clause.term = if crate::normalize::uses_raw_passthrough(self.language.code()) {
+            lexeme.str.clone()
+        } else {
+            normalize_for_language(self.language.code(), &lexeme.str)
+        };
 
         let Some(next) = self.peek_lexeme() else {
             self.next_clause();

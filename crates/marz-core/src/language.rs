@@ -74,6 +74,34 @@ pub struct MultiLanguage {
 }
 
 impl MultiLanguage {
+    /// Tokenize one union-separator-free `piece`, shifting positions by the
+    /// piece's start offset and deduplicating on (term, position).
+    fn tokenize_piece(
+        &self,
+        seen: &mut std::collections::HashSet<(String, Option<(usize, usize)>)>,
+        tokens: &mut Vec<Token>,
+        piece: &str,
+        piece_start: usize,
+    ) {
+        if piece.is_empty() {
+            return;
+        }
+        for lang in &self.languages {
+            for mut token in lang.tokenize(piece) {
+                if let Some((start, len)) = token.position().map(|(s, l)| (s + piece_start, l)) {
+                    token.metadata.insert(
+                        crate::token::POSITION.to_string(),
+                        crate::token::TokenMetadata::Pair(start, len),
+                    );
+                }
+                let key = (token.term.clone(), token.position());
+                if seen.insert(key) {
+                    tokens.push(token);
+                }
+            }
+        }
+    }
+
     /// Create a multi-language configuration.
     ///
     /// The code joins members with `,` — never `-`, which variant codes like
@@ -114,17 +142,43 @@ impl Language for MultiLanguage {
     }
 
     fn tokenize(&self, text: &str) -> Vec<Token> {
-        // Deduplicate on (term, position) rather than term alone. Deduplicating
-        // on the term would collapse repeated words in a document down to one
-        // occurrence, destroying both the term frequency and the positions that
-        // CJK phrase matching depends on.
+        // Split on the union separators FIRST, then run each member tokenizer
+        // per piece with rebased positions. Without this, a member whose own
+        // set lacks the separator emits terms the query lexer would split —
+        // e.g. `built-in` whole from the Japanese side of an `en,ja` index —
+        // ghost terms that bloat the index and distort BM25 field lengths,
+        // unreachable by any query. Pieces carry no separator, so per-member
+        // output needs no further splitting, only shifting.
+        //
+        // Deduplicate on (term, position) rather than term alone:
+        // collapsing repeated words would destroy both the term frequency and
+        // the positions that CJK phrase matching depends on.
         let mut seen = std::collections::HashSet::new();
         let mut tokens = Vec::new();
-        for lang in &self.languages {
-            for token in lang.tokenize(text) {
-                let key = (token.term.clone(), token.position());
-                if seen.insert(key) {
-                    tokens.push(token);
+        let mut piece = String::new();
+        let mut piece_start = 0usize; // char offset of the piece in `text`
+        let mut char_idx = 0usize;
+        let mut chars = text.chars().peekable();
+        loop {
+            match chars.peek() {
+                Some(&ch) if self.separators.contains(ch) => {
+                    self.tokenize_piece(&mut seen, &mut tokens, &piece, piece_start);
+                    piece.clear();
+                    chars.next();
+                    char_idx += 1;
+                    piece_start = char_idx;
+                }
+                Some(&ch) => {
+                    if piece.is_empty() {
+                        piece_start = char_idx;
+                    }
+                    piece.push(ch);
+                    chars.next();
+                    char_idx += 1;
+                }
+                None => {
+                    self.tokenize_piece(&mut seen, &mut tokens, &piece, piece_start);
+                    break;
                 }
             }
         }
@@ -223,6 +277,28 @@ mod tests {
         // dashes, so only a comma splits back apart on reload.
         assert_eq!(multi("en,ja").code(), "en,ja");
         assert_eq!(multi("en").code(), "en");
+    }
+
+    #[test]
+    fn separators_union_so_lexing_and_indexing_agree() {
+        // English splits on `-`, Japanese alone does not: without the union,
+        // `built-in` would index whole from one member while queries split it.
+        let en_sep = registry::resolve("en")
+            .language
+            .separator_chars()
+            .to_string();
+        assert!(en_sep.contains('-'));
+        let union = multi("en,ja").separator_chars().to_string();
+        assert!(union.contains('-'), "union must keep member separators");
+        let terms: Vec<String> = multi("en,ja")
+            .tokenize("built-in")
+            .into_iter()
+            .map(|t| t.term)
+            .collect();
+        assert!(
+            !terms.iter().any(|t| t == "built-in"),
+            "ghost whole-hyphen term must not form: {terms:?}"
+        );
     }
 
     #[test]

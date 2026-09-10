@@ -274,6 +274,14 @@ impl IndexBuilder {
                  via field:term syntax"
             )));
         }
+        if name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
+            || matches!(name.chars().next(), Some('+' | '-'))
+        {
+            return Err(PyValueError::new_err(format!(
+                "field {name:?} contains a query operator and is unqueryable \
+                 via field:term syntax"
+            )));
+        }
         if !boost.is_finite() {
             return Err(PyValueError::new_err("boost must be a finite number"));
         }
@@ -648,8 +656,12 @@ fn tokenize(py: Python<'_>, text: &str, language: &str) -> PyResult<Vec<String>>
 /// raw field.
 ///
 /// `language` selects the lowercasing rules and must be the index's language:
-/// Turkish (`"tr"`) folds `I` to `ı`, every other language to `i`. Unknown
-/// codes warn and fall back exactly like `tokenize`.
+/// Turkish (`"tr"`) folds `I` to `ı`, every other language to `i`. A
+/// multi-language code containing Turkish folds the default way instead —
+/// no single folding serves both members, so dotted-capital-I offsets in
+/// Turkish documents may shift by a character; search itself is unaffected
+/// (each member folds its own way at query time). Unknown codes warn and
+/// fall back exactly like `tokenize`.
 #[pyfunction]
 #[pyo3(signature = (text, language = "en"))]
 fn normalize(py: Python<'_>, text: &str, language: &str) -> PyResult<String> {
