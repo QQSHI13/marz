@@ -204,9 +204,13 @@ impl IndexBuilder {
         if !b.is_finite() {
             return Err(PyValueError::new_err("b must be a finite number"));
         }
+        // Canonical resolved code (`"en, ja"` → `"en,ja"`), matching what
+        // the index header stores, so identity survives a roundtrip.
+        let language = language_for(py, language)?;
+        let language_code = language.code().to_string();
         Ok(Self {
-            language_code: language.trim().to_string(),
-            language: language_for(py, language)?,
+            language_code,
+            language,
             ref_field: ref_field.trim().to_string(),
             fields: Vec::new(),
             docs: Vec::new(),
@@ -232,7 +236,15 @@ impl IndexBuilder {
         }
         if name.contains('/') {
             return Err(PyValueError::new_err(format!(
-                "field {name:?} must not contain '/' (breaks index serialization)"
+                "field {name:?} must not contain '/' (breaks FieldRef round-trip)"
+            )));
+        }
+        if name
+            .chars()
+            .any(|c| c.is_whitespace() || self.language.separator_chars().contains(c))
+        {
+            return Err(PyValueError::new_err(format!(
+                "field {name:?} contains a separator and is unqueryable via field: syntax"
             )));
         }
         if !boost.is_finite() {
@@ -517,9 +529,10 @@ impl Index {
             .language()
             .to_string();
         if let Some(requested) = language {
-            // Trimmed: builders store trimmed codes, WASM compares trimmed —
-            // padding is not a different language on any boundary.
-            if requested.trim() != stored {
+            // Canonical member lists, not raw strings: `"en, ja"` and
+            // `"en,ja"` are the same configuration (member order still
+            // matters — it affects stemming — so no sorting).
+            if registry::canonical_parts(requested) != registry::canonical_parts(&stored) {
                 return Err(FormatError::new_err(format!(
                     "index was built for language {stored:?}, not {requested:?}"
                 )));

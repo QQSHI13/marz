@@ -594,6 +594,37 @@ class TestCjk:
         assert marz.normalize("Istanbul") == "istanbul"
 
 
+class TestMultiLanguage:
+    def test_comma_code_builds_searches_and_roundtrips(self):
+        builder = marz.IndexBuilder("en,ja", ref_field="location")
+        assert builder.language == "en,ja"
+        builder.field("title", 10.0)
+        builder.field("text")
+        builder.add({"location": "en/", "title": "Search engine", "text": "offline"})
+        builder.add({"location": "ja/", "title": "検索エンジン", "text": "テスト"})
+        index = builder.build()
+        assert [h.ref for h in index.search("search")] == ["en/"]
+        assert [h.ref for h in index.search("検索エンジン")] == ["ja/"]
+        data = index.to_bytes()
+        assert marz.index_language(data) == "en,ja"
+        reloaded = marz.Index.from_bytes(data)
+        assert reloaded.language == "en,ja"
+        assert [h.ref for h in reloaded.search("検索エンジン")] == ["ja/"]
+
+    def test_member_order_and_spacing_are_canonical(self):
+        builder = marz.IndexBuilder("en,ja")
+        builder.field("body")
+        builder.add({"id": "x", "body": "hello"})
+        data = builder.build().to_bytes()
+        # Spacing is formatting, not identity; order affects stemming.
+        assert marz.Index.from_bytes(data, "en, ja").document_count == 1
+        with pytest.raises(marz.FormatError):
+            marz.Index.from_bytes(data, "ja,en")
+
+    def test_trailing_comma_behaves_like_single_code(self):
+        assert marz.IndexBuilder("en,").language == "en"
+
+
 class TestNormalize:
     def test_normalize_folds_width_and_case(self):
         assert marz.normalize("ＲＵＳＴ") == "rust"

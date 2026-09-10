@@ -92,17 +92,8 @@ impl TokenSet {
         if !crate::query::has_unescaped_wildcard(term) {
             return self.expand_exact(&crate::query::unescape_term(term));
         }
-        // Runs of `*` are equivalent to a single one, and collapsing them
-        // first keeps the pattern — and so the state space below — short.
-        // Escaped stars ride along as a sentinel character so the walk treats
-        // them as literal text: collapsing and matching both key off bare
-        // `*` only. (A literal PUA char in indexed text would collide; no
-        // tokenizer emits one.)
-        const ESC_STAR: char = '\u{E000}';
-        let with_sentinels = term.replace("\\*", &ESC_STAR.to_string());
-        let pattern: Vec<char> = collapse_stars(&with_sentinels).chars().collect();
         let mut walk = WildcardWalk {
-            pattern,
+            pattern: parse_pattern(term),
             visited: HashSet::new(),
             results: Vec::new(),
         };
@@ -198,21 +189,66 @@ impl TokenSet {
     }
 }
 
-/// Collapse every run of `*` in `pattern` to a single `*`.
-fn collapse_stars(pattern: &str) -> String {
-    let mut out = String::with_capacity(pattern.len());
-    for ch in pattern.chars() {
-        if ch == '*' && out.ends_with('*') {
+/// One element of a wildcard pattern: a real wildcard or literal text.
+///
+/// Parsing with backslash parity (see `query::has_unescaped_wildcard`) instead
+/// of a sentinel character means no literal text — not even private-use
+/// characters in the corpus — can collide with the encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatternChar {
+    Wild,
+    Lit(char),
+}
+
+/// Parse a wildcard pattern, collapsing runs of bare `*` (equivalent to one)
+/// so the state space below stays short. Escaped stars become `Lit('*')`.
+fn parse_pattern(term: &str) -> Vec<PatternChar> {
+    let chars: Vec<char> = term.chars().collect();
+    let mut out = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            let mut n = 0;
+            while i < chars.len() && chars[i] == '\\' {
+                n += 1;
+                i += 1;
+            }
+            if i < chars.len() && chars[i] == '*' {
+                // Even run: the backslashes are literal text, the star is a
+                // real wildcard. Odd run: the last backslash escapes the star.
+                for _ in 0..n / 2 {
+                    out.push(PatternChar::Lit('\\'));
+                }
+                if n % 2 == 1 {
+                    out.push(PatternChar::Lit('*'));
+                    i += 1;
+                } else {
+                    out.push(PatternChar::Wild);
+                    i += 1;
+                }
+                continue;
+            }
+            for _ in 0..(n + 1) / 2 {
+                out.push(PatternChar::Lit('\\'));
+            }
             continue;
         }
-        out.push(ch);
+        if chars[i] == '*' {
+            if !matches!(out.last(), Some(PatternChar::Wild)) {
+                out.push(PatternChar::Wild);
+            }
+            i += 1;
+            continue;
+        }
+        out.push(PatternChar::Lit(chars[i]));
+        i += 1;
     }
     out
 }
 
 /// State for one wildcard expansion.
 struct WildcardWalk {
-    pattern: Vec<char>,
+    pattern: Vec<PatternChar>,
     /// `(node index, pattern position)` pairs already expanded.
     visited: HashSet<(usize, usize)>,
     results: Vec<String>,
@@ -254,25 +290,21 @@ impl WildcardWalk {
                 }
                 continue;
             }
-            if self.pattern[at] == '*' {
-                stack.push((idx, at + 1, prefix.clone()));
-                for (edge_ch, child) in &node.edges {
-                    let mut extended = prefix.clone();
-                    extended.push(*edge_ch);
-                    stack.push((*child, at, extended));
+            match self.pattern[at] {
+                PatternChar::Wild => {
+                    stack.push((idx, at + 1, prefix.clone()));
+                    for (edge_ch, child) in &node.edges {
+                        let mut extended = prefix.clone();
+                        extended.push(*edge_ch);
+                        stack.push((*child, at, extended));
+                    }
                 }
-            } else {
-                // Literal match — including the escaped-star sentinel, which
-                // quotes the indexed `*` it stood for, never itself.
-                let want = if self.pattern[at] == '\u{E000}' {
-                    '*'
-                } else {
-                    self.pattern[at]
-                };
-                if let Some(child) = node.edges.get(&want) {
-                    let mut extended = prefix;
-                    extended.push(want);
-                    stack.push((*child, at + 1, extended));
+                PatternChar::Lit(want) => {
+                    if let Some(child) = node.edges.get(&want) {
+                        let mut extended = prefix;
+                        extended.push(want);
+                        stack.push((*child, at + 1, extended));
+                    }
                 }
             }
         }
@@ -484,13 +516,24 @@ mod tests {
     }
 
     #[test]
-    fn collapsing_stars_leaves_other_characters_alone() {
-        assert_eq!(collapse_stars("*"), "*");
-        assert_eq!(collapse_stars("****"), "*");
-        assert_eq!(collapse_stars("a**b***c"), "a*b*c");
-        assert_eq!(collapse_stars("abc"), "abc");
-        assert_eq!(collapse_stars(""), "");
-        assert_eq!(collapse_stars("検**索"), "検*索");
+    fn pattern_parsing_collapses_runs_and_honors_escapes() {
+        use PatternChar::{Lit, Wild};
+        assert_eq!(parse_pattern("*"), [Wild]);
+        assert_eq!(parse_pattern("****"), [Wild]);
+        assert_eq!(
+            parse_pattern("a**b***c"),
+            [Lit('a'), Wild, Lit('b'), Wild, Lit('c')]
+        );
+        assert_eq!(parse_pattern("abc"), [Lit('a'), Lit('b'), Lit('c')]);
+        assert_eq!(parse_pattern(""), []);
+        assert_eq!(parse_pattern("検**索"), [Lit('検'), Wild, Lit('索')]);
+        // Escaped stars are literal; an even backslash run is literal text
+        // plus a real wildcard.
+        assert_eq!(parse_pattern("a\\*b"), [Lit('a'), Lit('*'), Lit('b')]);
+        assert_eq!(
+            parse_pattern("a\\\\*b"),
+            [Lit('a'), Lit('\\'), Wild, Lit('b')]
+        );
     }
 
     #[test]

@@ -85,8 +85,10 @@ pub fn resolve_multi(code: &str) -> Resolved {
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .collect();
+    // A trailing comma is not a second language: resolve the single member,
+    // so `"en,"` behaves exactly like `"en"` instead of falling back.
     if parts.len() <= 1 {
-        return resolve(code);
+        return resolve(parts.first().copied().unwrap_or(""));
     }
 
     let mut languages = Vec::with_capacity(parts.len());
@@ -147,6 +149,19 @@ pub fn codes() -> Vec<&'static str> {
 /// Kept beside [`exact`]'s `match` so that adding one without adding it here
 /// fails [`tests::every_code_resolves_exactly`].
 const HAND_WRITTEN: &[&str] = &["en", "zh", "ja", "ko"];
+
+/// Split a possibly multi-language code into canonical member codes.
+///
+/// Trims whitespace, drops empties, preserves order: `"en, ja"` and `"en,ja"`
+/// are the same configuration, while `"ja,en"` is not (member order affects
+/// stemming). Used to compare a requested code against a stored one without
+/// tripping on formatting.
+pub fn canonical_parts(code: &str) -> Vec<String> {
+    code.split(',')
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
 
 /// Whether `code` names a language Marz implements.
 ///

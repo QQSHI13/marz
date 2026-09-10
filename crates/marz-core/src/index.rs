@@ -277,14 +277,23 @@ impl IndexBuilder {
     /// duplicates with an error instead — same outcome for well-formed
     /// configurations, louder for mistakes.
     ///
-    /// Panics on an empty name or one containing `/`: a `/` breaks `FieldRef`
-    /// round-tripping, and an empty name is always a configuration bug.
-    /// Failing fast beats a silently corrupt index.
+    /// Panics on an empty name, one containing `/`, or one containing a
+    /// separator character: a `/` breaks `FieldRef` round-tripping, an empty
+    /// name is always a configuration bug, and a name the query lexer would
+    /// split (spaces and the language's separators) is unrepresentable in
+    /// `field:term` syntax, so declaring it can only build an unqueryable
+    /// field. Failing fast beats a silently corrupt index.
     /// Non-finite boosts fall back to `1.0`; negative boosts clamp to `0.0`
     /// (they still match, contributing no score).
     pub fn field(&mut self, name: impl Into<String>, boost: f64) -> &mut Self {
         let name = name.into();
         assert!(!name.is_empty(), "field name must not be empty");
+        assert!(
+            !name
+                .chars()
+                .any(|c| c.is_whitespace() || self.language.separator_chars().contains(c)),
+            "field name {name:?} contains a separator and is unqueryable"
+        );
         debug_assert!(
             name != self.ref_field,
             "indexing the reference field inflates scores; the bindings reject this"
@@ -839,7 +848,12 @@ impl Index {
     ) -> Result<Self, crate::binary::FormatError> {
         let binary = crate::binary::BinaryIndex::open(bytes)?;
 
-        if binary.language() != language.code() {
+        // Canonical member lists, not raw strings: `"en, ja"` and `"en,ja"`
+        // are the same configuration, while `"ja,en"` is genuinely different
+        // (member order affects stemming).
+        if crate::languages::canonical_parts(binary.language())
+            != crate::languages::canonical_parts(language.code())
+        {
             return Err(crate::binary::FormatError::LanguageMismatch {
                 expected: language.code().to_string(),
                 found: binary.language().to_string(),
@@ -909,14 +923,19 @@ impl Index {
             }
         }
 
+        // Boosts are re-validated, not trusted: the writer clamps, so a
+        // negative or non-finite value here means corrupt bytes. Loading it
+        // verbatim would mint negative scores.
         let mut field_boosts = HashMap::with_capacity(fields.len());
         for (field_id, field_name) in fields.iter().enumerate() {
-            field_boosts.insert(field_name.clone(), binary.field_boost(field_id as u32)?);
+            let boost = binary.field_boost(field_id as u32)?;
+            field_boosts.insert(field_name.clone(), sanitize_boost(boost));
         }
 
         let mut doc_boosts = HashMap::with_capacity(doc_refs.len());
         for (doc_id, doc_ref) in doc_refs.iter().enumerate() {
-            doc_boosts.insert(doc_ref.clone(), binary.doc_boost(doc_id as u32)?);
+            let boost = binary.doc_boost(doc_id as u32)?;
+            doc_boosts.insert(doc_ref.clone(), sanitize_boost(boost));
         }
 
         let stats = Stats {
@@ -966,6 +985,18 @@ fn satisfies_required(required: Option<&HashSet<&str>>, doc_ref: &str) -> bool {
     match required {
         Some(set) => set.contains(doc_ref),
         None => true,
+    }
+}
+
+/// Clamp a boost read from untrusted bytes to the builder's contract.
+///
+/// Mirrors `IndexBuilder`'s normalization so a forged negative or NaN boost
+/// cannot mint negative scores at query time.
+fn sanitize_boost(boost: f64) -> f64 {
+    if boost.is_finite() {
+        boost.max(0.0)
+    } else {
+        1.0
     }
 }
 

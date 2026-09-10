@@ -9,6 +9,8 @@
 //! * `term^N` — boost (float, e.g. `^2.5`, exponent, e.g. `^1e3`;
 //!   non-negative — `^-1` is a parse error, while a programmatically built
 //!   negative boost clamps to `0.0`)
+//! * `term~N` — fuzzy edit distance (non-negative integer; `*` inside a fuzzy
+//!   term is an ordinary character, so `a\*b~1` still means literal `a*b`)
 //! * `term~N` — fuzzy edit distance (non-negative integer)
 //! * backslash escaping for special characters (`\*` is literal, not a wildcard)
 //!
@@ -110,12 +112,12 @@ impl<'a> QueryLexer<'a> {
                 continue;
             }
             sub_slices.extend(self.chars[slice_start..escape_pos].iter().copied());
-            // An escaped `*` is literal text, not a wildcard — but stripping
-            // the backslash would make it indistinguishable from a real one
-            // downstream (`contains('*')` can't tell them apart). Retain the
-            // backslash; expansion strips `\` + `*` back to a literal star for
-            // exact lookup. All other escapes are still removed.
-            if self.chars.get(escape_pos + 1) == Some(&'*') {
+            // Escapes are retained when a later stage must still see them:
+            // `\` before `*` marks a literal star, `\` before `\` a literal
+            // backslash. Parity counting (`query::has_unescaped_wildcard`)
+            // then distinguishes every case. All other escapes are removed.
+            let escaped = self.chars.get(escape_pos + 1);
+            if escaped == Some(&'*') || escaped == Some(&'\\') {
                 sub_slices.push('\\');
             }
             slice_start = escape_pos + 1;

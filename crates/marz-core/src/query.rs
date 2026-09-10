@@ -65,47 +65,104 @@ impl Default for Clause {
     }
 }
 
+/// Whether `term` starts with an unescaped `*`.
+///
+/// A leading backslash escapes it (`\*foo` is literal text), so a plain
+/// `starts_with` check would mistake an escaped star for a wildcard affix.
+fn starts_with_unescaped_wildcard(term: &str) -> bool {
+    let mut chars = term.chars();
+    match (chars.next(), chars.next()) {
+        (Some('*'), _) => true,
+        (Some('\\'), Some('*')) => false,
+        _ => false,
+    }
+}
+
+/// Whether `term` ends with an unescaped `*`, counting backslash parity:
+/// an odd run (`a\*`) escapes it, an even run (`a\\*`) does not.
+fn ends_with_unescaped_wildcard(term: &str) -> bool {
+    let chars: Vec<char> = term.chars().collect();
+    if chars.last() != Some(&'*') {
+        return false;
+    }
+    let mut backslashes = 0;
+    for &ch in chars[..chars.len() - 1].iter().rev() {
+        if ch != '\\' {
+            break;
+        }
+        backslashes += 1;
+    }
+    backslashes % 2 == 0
+}
+
 /// Whether `term` contains a `*` that is not backslash-escaped.
 ///
-/// The query lexer retains the backslash before an escaped star (see
-/// `QueryLexer::slice_string`), so post-lexing text still carries the
-/// distinction — except for a star escaped by an escaped backslash
-/// (`\\*`), which lexes as a bare star anyway and arrives here already
-/// resolved.
+/// Backslashes pair left to right: an even run (`\\`) is literal text and the
+/// star after it is a real wildcard; an odd run (`\*`) escapes the star.
+/// Post-lexing text upholds this invariant because the lexer retains `\`
+/// before both `*` and `\` (see `QueryLexer::slice_string`).
 pub(crate) fn has_unescaped_wildcard(term: &str) -> bool {
-    let mut escaped = false;
-    for ch in term.chars() {
-        if escaped {
-            escaped = false;
+    let chars: Vec<char> = term.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '\\' {
+            if chars[i] == '*' {
+                return true;
+            }
+            i += 1;
             continue;
         }
-        if ch == '\\' {
-            escaped = true;
-            continue;
+        let mut n = 0;
+        while i < chars.len() && chars[i] == '\\' {
+            n += 1;
+            i += 1;
         }
-        if ch == '*' {
-            return true;
+        if i < chars.len() && chars[i] == '*' {
+            if n % 2 == 0 {
+                return true;
+            }
+            i += 1; // Escaped star: literal, skip it.
         }
     }
     false
 }
 
-/// Strip the retained backslashes before escaped stars (`\*` → `*`).
+/// Strip escape backslashes (`\*` → `*`, `\\` → `\`, trailing `\` stays).
 ///
-/// Post-lexing text only ever holds backslashes in that position (every other
-/// escape is removed by the lexer), so this is exact — and a no-op for terms
-/// without escapes.
+/// Post-lexing text only holds backslashes from escaping, so this inverts the
+/// lexer exactly. A star after an even run stays put: it is a real wildcard,
+/// not an escape, and consuming it here would corrupt wildcard patterns.
+/// Call only on paths without unescaped wildcards.
 pub(crate) fn unescape_term(term: &str) -> String {
     if !term.contains('\\') {
         return term.to_string();
     }
+    let chars: Vec<char> = term.chars().collect();
     let mut out = String::with_capacity(term.len());
-    let mut chars = term.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' && chars.peek() == Some(&'*') {
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '\\' {
+            out.push(chars[i]);
+            i += 1;
             continue;
         }
-        out.push(ch);
+        let mut n = 0;
+        while i < chars.len() && chars[i] == '\\' {
+            n += 1;
+            i += 1;
+        }
+        if i < chars.len() && chars[i] == '*' {
+            out.extend(std::iter::repeat('\\').take(n / 2));
+            if n % 2 == 1 {
+                // Escaped star: literal text, consume it.
+                out.push('*');
+                i += 1;
+            }
+            // Even run: the star is a real wildcard, leave it.
+        } else {
+            // Literal backslashes (`\\` pairs) and a trailing lone `\`.
+            out.extend(std::iter::repeat('\\').take(n.div_ceil(2)));
+        }
     }
     out
 }
@@ -156,14 +213,16 @@ impl Query {
             1.0
         };
 
-        // Apply automatic wildcards.
+        // Apply automatic wildcards, honoring escapes: a term already ending
+        // in an unescaped `*` needs nothing appended, but a trailing escaped
+        // star (`a\*`) is literal text that still wants its wildcard.
         if (clause.wildcard == Wildcard::Leading || clause.wildcard == Wildcard::Both)
-            && !clause.term.starts_with('*')
+            && !starts_with_unescaped_wildcard(&clause.term)
         {
             clause.term = format!("*{}", clause.term);
         }
         if (clause.wildcard == Wildcard::Trailing || clause.wildcard == Wildcard::Both)
-            && !clause.term.ends_with('*')
+            && !ends_with_unescaped_wildcard(&clause.term)
         {
             clause.term = format!("{}*", clause.term);
         }
@@ -202,5 +261,68 @@ impl Query {
                 .clauses
                 .iter()
                 .all(|c| c.presence == Presence::Prohibited)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wildcard_detection_counts_backslash_parity() {
+        // Bare stars count; odd runs escape; even runs are literal text
+        // followed by a real wildcard.
+        assert!(has_unescaped_wildcard("foo*"));
+        assert!(has_unescaped_wildcard("*foo"));
+        assert!(!has_unescaped_wildcard(r"foo\*"));
+        assert!(has_unescaped_wildcard(r"foo\\*"));
+        assert!(!has_unescaped_wildcard("foo"));
+        assert!(!has_unescaped_wildcard("foo\\"));
+        assert!(!has_unescaped_wildcard(""));
+    }
+
+    #[test]
+    fn unescaping_inverts_the_lexer_exactly() {
+        assert_eq!(unescape_term("foo"), "foo");
+        assert_eq!(unescape_term("foo*"), "foo*");
+        assert_eq!(unescape_term(r"foo\*"), "foo*");
+        assert_eq!(unescape_term(r"foo\\*"), "foo\\*");
+        assert_eq!(unescape_term("foo\\"), "foo\\");
+    }
+
+    #[test]
+    fn affix_checks_honor_escapes() {
+        assert!(starts_with_unescaped_wildcard("*foo"));
+        assert!(!starts_with_unescaped_wildcard("\\*foo"));
+        assert!(!starts_with_unescaped_wildcard("foo"));
+        assert!(ends_with_unescaped_wildcard("foo*"));
+        assert!(!ends_with_unescaped_wildcard("foo\\*"));
+        assert!(ends_with_unescaped_wildcard("foo\\\\*"));
+        assert!(!ends_with_unescaped_wildcard("foo"));
+    }
+
+    #[test]
+    fn auto_wildcard_still_applies_past_an_escaped_star() {
+        // Trailing on a literal-star term must append a real wildcard.
+        let mut query = Query::new(vec!["body".to_string()]);
+        query.clause(Clause {
+            term: "a\\*".to_string(),
+            wildcard: Wildcard::Trailing,
+            ..Clause::default()
+        });
+        assert_eq!(query.clauses[0].term, "a\\**");
+        assert!(query.clauses[0].has_wildcard);
+    }
+
+    #[test]
+    fn stale_wildcard_flag_is_cleared() {
+        let mut query = Query::new(vec!["body".to_string()]);
+        query.clause(Clause {
+            term: "plain".to_string(),
+            has_wildcard: true,
+            ..Clause::default()
+        });
+        assert!(!query.clauses[0].has_wildcard);
+        assert!(query.clauses[0].use_pipeline);
     }
 }

@@ -74,7 +74,14 @@ impl MultiLanguage {
     /// The code joins members with `,` — never `-`, which variant codes like
     /// `en-snowball` already contain — so [`crate::languages::resolve_multi`]
     /// can split it back apart when reloading an index.
+    ///
+    /// Panics in debug builds on an empty member list: no member keeps any
+    /// token, so such an index could never match anything.
     pub fn new(languages: Vec<LanguageRef>) -> Self {
+        debug_assert!(
+            !languages.is_empty(),
+            "MultiLanguage needs at least one member language"
+        );
         let code = languages
             .iter()
             .map(|l| l.code())
@@ -122,8 +129,13 @@ impl Language for MultiLanguage {
 
     fn trim(&self, token: &mut Token) -> bool {
         // A token passes the trimmer if any configured language keeps it.
+        // Trial on a clone: `trim` rewrites the term in place even when it
+        // returns false, so sharing one token across members would let a
+        // rejection corrupt the input of the next member.
         for lang in &self.languages {
-            if lang.trim(token) {
+            let mut trial = token.clone();
+            if lang.trim(&mut trial) {
+                *token = trial;
                 return true;
             }
         }

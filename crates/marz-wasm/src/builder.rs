@@ -82,15 +82,16 @@ impl MarzBuilder {
         k1: Option<f64>,
         b: Option<f64>,
     ) -> Result<MarzBuilder, JsValue> {
-        // Resolved and discarded: this is here to reject a bad code at
-        // construction. Deferring it to `build` would let a caller stage a
-        // thousand documents before learning the language was misspelled.
-        // `language_for` never throws (unknown codes fall back with a warning),
-        // so no `?` — but empty codes are always a bug.
+        // Resolved and kept: the canonical code (`"en, ja"` → `"en,ja"`)
+        // matches what the index header stores, so identity survives a
+        // roundtrip. This also rejects nothing — unknown codes fall back with
+        // a warning — but empty codes are always a bug. Resolving here rather
+        // than at `build` surfaces a misspelling before a thousand documents
+        // are staged.
         if language.trim().is_empty() {
             return Err(error("language must not be empty"));
         }
-        let _ = language_for(language);
+        let language_code = language_for(language).code().to_string();
         let ref_field = ref_field.unwrap_or_else(|| "id".to_string());
         if ref_field.trim().is_empty() {
             return Err(error("refField must not be empty"));
@@ -111,7 +112,7 @@ impl MarzBuilder {
             None => 0.75,
         };
         Ok(MarzBuilder {
-            language_code: language.trim().to_string(),
+            language_code,
             ref_field,
             fields: Vec::new(),
             docs: Vec::new(),
@@ -136,7 +137,21 @@ impl MarzBuilder {
         }
         if name.contains('/') {
             return Err(error(&format!(
-                "field {name:?} must not contain '/' (breaks index serialization)"
+                "field {name:?} must not contain '/' (breaks FieldRef round-trip)"
+            )));
+        }
+        // The builder only stores the code; resolve for the separator set.
+        // (Core asserts the same predicate as a backstop.)
+        let separators = marz_core::languages::registry::resolve(&self.language_code)
+            .language
+            .separator_chars()
+            .to_string();
+        if name
+            .chars()
+            .any(|c| c.is_whitespace() || separators.contains(c))
+        {
+            return Err(error(&format!(
+                "field {name:?} contains a separator and is unqueryable via field: syntax"
             )));
         }
         if self.fields.iter().any(|(existing, _)| existing == name) {

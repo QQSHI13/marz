@@ -260,9 +260,8 @@ impl MarzIndex {
             .to_string();
 
         if let Some(expected) = expected_language {
-            // Trimmed: builders store trimmed codes, so padding is not a
-            // different language.
-            if expected.trim() != stored {
+            // Canonical member lists, not raw strings (see `from_binary`).
+            if registry::canonical_parts(&expected) != registry::canonical_parts(&stored) {
                 return Err(error(&format!(
                     "index was built for language {stored:?}, not {expected:?}"
                 )));

@@ -69,19 +69,21 @@ pub fn bm25_weight(
     // Public function: callers other than `Index::score_term` offer no guard,
     // and without this `avg == 0` yields `inf`/`NaN` scores. Negative and
     // non-finite inputs likewise cannot score: a negative length inverts the
-    // length norm, and a negative idf breaks the score >= 0 invariant.
+    // length norm, a negative idf breaks the score >= 0 invariant, and a
+    // negative or non-finite boost would flip or NaN the weight.
     if !tf.is_finite()
         || !avg_field_len.is_finite()
         || !field_len.is_finite()
         || !idf.is_finite()
+        || !field_boost.is_finite()
+        || !doc_boost.is_finite()
         || tf <= 0.0
         || avg_field_len <= 0.0
         || field_len < 0.0
         || idf < 0.0
+        || field_boost < 0.0
+        || doc_boost < 0.0
     {
-        return 0.0;
-    }
-    if !idf.is_finite() || !field_boost.is_finite() || !doc_boost.is_finite() {
         return 0.0;
     }
     let k1 = if k1.is_finite() && k1 >= 0.0 { k1 } else { 1.2 };
@@ -112,5 +114,22 @@ mod tests {
         let w = bm25_weight(1.5, 2.0, 10.0, 10.0, 1.2, 0.75, 1.0, 1.0);
         // Rounded to 3 decimal places
         assert_eq!((w * 1000.0).round() / 1000.0, w);
+    }
+
+    #[test]
+    fn test_bm25_weight_rejects_bad_inputs() {
+        // Scores must never go negative or non-finite: forged bytes and
+        // direct callers can feed anything.
+        let good = bm25_weight(1.5, 2.0, 10.0, 10.0, 1.2, 0.75, 1.0, 1.0);
+        assert!(good > 0.0);
+        for bad in [
+            bm25_weight(1.5, 2.0, -5.0, 10.0, 1.2, 0.75, 1.0, 1.0),
+            bm25_weight(-1.5, 2.0, 10.0, 10.0, 1.2, 0.75, 1.0, 1.0),
+            bm25_weight(1.5, 2.0, 10.0, 10.0, 1.2, 0.75, -2.0, 1.0),
+            bm25_weight(1.5, 2.0, 10.0, 10.0, 1.2, 0.75, 1.0, f64::NAN),
+            bm25_weight(f64::INFINITY, 2.0, 10.0, 10.0, 1.2, 0.75, 1.0, 1.0),
+        ] {
+            assert_eq!(bad, 0.0, "bad input must score zero, got {bad}");
+        }
     }
 }

@@ -71,8 +71,21 @@ pub fn normalize(text: &str) -> String {
 /// other code folds through [`normalize`]. Both the indexer and the query
 /// parser must use this same dispatch, or the two sides disagree on what
 /// `Istanbul` becomes and Turkish queries silently miss.
+///
+/// A multi-language code containing `tr` (`en,tr`) folds nothing at all: each
+/// member's tokenizer folds its own way at index time, and any global fold
+/// here could only destroy information one member needs (`I` → `i` loses
+/// `ı`). Single `tr` still folds Turkish.
 pub fn normalize_for_language(code: &str, text: &str) -> String {
-    if code == "tr" {
+    let members: Vec<&str> = code
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if members.len() > 1 && members.contains(&"tr") {
+        return text.to_string();
+    }
+    if code.trim() == "tr" {
         normalize_tr(text)
     } else {
         normalize(text)
