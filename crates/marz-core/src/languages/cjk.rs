@@ -69,8 +69,13 @@ pub fn is_hiragana(c: char) -> bool {
 }
 
 /// Returns true for Katakana, including the prolonged sound mark.
+///
+/// Excludes `U+30FB` (・ middle dot): it is punctuation separating foreign-word
+/// fragments (`ビジネス・ホテル`), not a syllable. Bigramming across it would
+/// mint noise terms like `ス・` and glue runs that script segmentation should
+/// split.
 pub fn is_katakana(c: char) -> bool {
-    matches!(c as u32, 0x30A1..=0x30FF | 0x31F0..=0x31FF)
+    matches!(c as u32, 0x30A1..=0x30FA | 0x30FC..=0x30FF | 0x31F0..=0x31FF)
 }
 
 /// Returns true for Hangul syllables and Jamo.
@@ -351,8 +356,18 @@ fn cluster_bounds(run: &[char], script: Script) -> Vec<usize> {
 /// position covering the untrimmed span, and every highlight would include the
 /// punctuation the trimmer had just removed.
 pub fn cjk_trim(token: &mut Token) -> bool {
-    if token.term.chars().next().is_some_and(is_ngram_char) {
-        return !token.term.is_empty();
+    // All-ngram terms (bigrams, lone characters, lone clusters) pass through:
+    // trimming them would slice linguistic units. Anything else is a
+    // separator-delimited run trimmed of surrounding punctuation — deciding on
+    // every character rather than the first keeps a hypothetical mixed run
+    // from smuggling punctuation into positions and highlights.
+    if !token.term.is_empty()
+        && token
+            .term
+            .chars()
+            .all(|c| is_ngram_char(c) || is_combining_mark(c))
+    {
+        return true;
     }
     // Non-ngram runs (Latin, digits): keep alphanumerics plus combining marks
     // so a trailing vowel/tone sign is not stripped off its base.
@@ -401,6 +416,33 @@ mod tests {
         let t = terms(&tokens);
         assert_eq!(t, ["検索", "エン", "ンジ", "ジン"]);
         assert!(!t.contains(&"索エ".to_string()));
+    }
+
+    #[test]
+    fn katakana_middle_dot_splits_runs() {
+        // ・ is punctuation, not a syllable: no bigram may span it. (The lone
+        // "・" token below is dropped by `cjk_trim` at index time; the point
+        // is nothing glues across it.)
+        let tokens = tokenize_cjk("ビジネス・ホテル", &[Script::Katakana]);
+        let t = terms(&tokens);
+        assert_eq!(t, ["ビジ", "ジネ", "ネス", "・", "ホテ", "テル"]);
+
+        // …and the trimmer drops that lone dot before indexing.
+        let mut dot = Token::new("・");
+        assert!(!cjk_trim(&mut dot));
+    }
+
+    #[test]
+    fn trimmer_judges_every_character_not_just_the_first() {
+        // A hypothetical mixed run must not smuggle punctuation past the
+        // trimmer just because it starts with an n-gram character.
+        let mut mixed = Token::new("日本!");
+        assert!(cjk_trim(&mut mixed));
+        assert_eq!(mixed.term, "日本");
+        // Pure runs are untouched.
+        let mut bigram = Token::new("検索");
+        assert!(cjk_trim(&mut bigram));
+        assert_eq!(bigram.term, "検索");
     }
 
     #[test]

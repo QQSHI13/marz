@@ -146,6 +146,13 @@ const HOSTILE_QUERIES: &[&str] = &[
     "***",
     "*a*",
     "a*b*c*d*e*f*g*",
+    // Escaped stars: literal text, exercising the backslash-retaining lexer
+    // path and the exact-lookup branch on every language below.
+    "a\\*b",
+    "a\\*b*",
+    "\\\\*",
+    "\\*",
+    "hello\\*world~1",
     // Field scoping gone wrong.
     "title:body:keyboard",
     "title:*",

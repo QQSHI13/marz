@@ -79,19 +79,13 @@ pub fn normalize_for_language(code: &str, text: &str) -> String {
     }
 }
 
-/// Normalize with Turkish dotless/dotted-I rules.
+/// Lowercase with Turkish dotless/dotted-I rules: `I` → `ı`, `İ` → `i`.
 ///
-/// Identical to [`normalize`] except the final lowercasing: `I` → `ı`
-/// (U+0131) and `İ` → `i`, matching Turkish orthography. Unicode default
-/// lowercasing maps `I` → `i`, which merges two distinct Turkish letters and
-/// feeds the Snowball Turkish stemmer input it was not designed for. Both the
-/// indexer and the query path must use the same variant, which
-/// `SnowballLanguage` ensures by dispatching on its code.
-pub fn normalize_tr(text: &str) -> String {
-    // Reuse the width-folding half, then Turkish-lowercase.
-    let folded = normalize_fold_only(text);
-    let mut out = String::with_capacity(folded.len());
-    for c in folded.chars() {
+/// Shared by [`normalize_tr`] and the Turkish stemmer path so the two cannot
+/// drift apart (both must agree, or queries miss indexed terms).
+pub fn turkish_lowercase(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
         match c {
             'I' => out.push('ı'),
             'İ' => out.push('i'),
@@ -99,6 +93,17 @@ pub fn normalize_tr(text: &str) -> String {
         }
     }
     out
+}
+/// Normalize with Turkish dotless/dotted-I rules.
+///
+/// Identical to [`normalize`] except the final lowercasing, which goes
+/// through [`turkish_lowercase`]. Unicode default lowercasing maps `I` → `i`,
+/// which merges two distinct Turkish letters and feeds the Snowball Turkish
+/// stemmer input it was not designed for. Both the indexer and the query path
+/// must use the same variant, which `SnowballLanguage` ensures by dispatching
+/// on its code.
+pub fn normalize_tr(text: &str) -> String {
+    turkish_lowercase(&normalize_fold_only(text))
 }
 
 /// Width-folding half of [`normalize`] without lowercasing, shared by both

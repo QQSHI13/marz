@@ -16,12 +16,15 @@
     "dist",
     "pkg/marz_wasm_bg.wasm",
     "pkg/marz_wasm.js",
-    "pkg/marz_wasm.d.ts"
+    "pkg/marz_wasm.d.ts",
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build:wasm": "../scripts/build-wasm.sh",
     "build:ts": "tsc",
     "build": "npm run build:wasm && npm run build:ts",
+    "prepack": "cp ../LICENSE ../README.md ./",
     "typecheck": "tsc --noEmit",
     "test": "npm run build:wasm && node --test 'test/*.test.ts'",
     "test:only": "node --test 'test/*.test.ts'",

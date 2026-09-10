@@ -44,9 +44,11 @@ jobs:
       - uses: actions/checkout@v7
       - id: v
         run: |
-          cargo_version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          # python3+tomllib instead of grep: `^version` matches whatever
+          # `version` line comes first and silently breaks on reorder.
+          cargo_version=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
           npm_version=$(node -p "require('./js/package.json').version")
-          py_version=$(grep -m1 '^version' python/pyproject.toml | cut -d'"' -f2)
+          py_version=$(python3 -c "import tomllib; print(tomllib.load(open('python/pyproject.toml','rb'))['project']['version'])")
           echo "version=$cargo_version" >> "$GITHUB_OUTPUT"
 
           if [ "$cargo_version" != "$npm_version" ]; then

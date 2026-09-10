@@ -23,6 +23,9 @@ fmt:
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo clippy -p marz-wasm --target wasm32-unknown-unknown --features builder -- -D warnings
+    # The builder also compiles on host (js_sys has host stubs): catch
+    # host-only cfg breakage that the wasm-target lint cannot see.
+    cargo clippy -p marz-wasm --all-targets --features builder -- -D warnings
 
 # Build Python wheel (requires maturin)
 build-python:
@@ -85,8 +88,8 @@ build-all: build-python build-wasm build-js
 #
 # The npm check is the one that has caught a real bug: the tarball shipped
 # without its WebAssembly, because wasm-pack leaves a `.gitignore` containing `*`
-# in its output directory and npm honours a nested one over `files`. Expect ~8
-# files and ~98 kB. Five files and 6 kB means the engine is missing.
+# in its output directory and npm honours a nested one over `files`. Expect ~10
+# files and ~225 kB. Five files and 6 kB means the engine is missing.
 publish-dry: build-wasm
     cd js && npm install && npm run build:ts && npm pack --dry-run
     cargo publish -p marz-core --dry-run

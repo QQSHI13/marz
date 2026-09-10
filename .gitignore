@@ -15,6 +15,10 @@ python/build/
 node_modules/
 js/dist/
 js/pkg/
+# Copies staged by `npm run prepack` for the published tarball; the
+# canonicals live at the repo root.
+js/LICENSE
+js/README.md
 
 # Editors
 .DS_Store

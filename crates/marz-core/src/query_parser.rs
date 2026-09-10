@@ -59,12 +59,6 @@ struct Lexeme {
     str: String,
     start: usize,
     end: usize,
-    /// Whether the lexeme contains an unescaped `*`.
-    ///
-    /// Escaped stars (`\*`) are literal text: the backslash is retained in
-    /// `str` (see `slice_string`) and this stays false, so an escaped star
-    /// neither disables the pipeline nor triggers wildcard expansion.
-    wildcard: bool,
 }
 
 /// Lexer for lunr query syntax.
@@ -75,11 +69,6 @@ struct QueryLexer<'a> {
     pos: usize,
     start: usize,
     escape_positions: Vec<usize>,
-    /// Whether the lexeme currently being scanned contains an unescaped `*`.
-    ///
-    /// Set only for stars that reach the `lex_text` loop body: stars consumed
-    /// by `escape_character` (i.e. `\` + `*`) never get here. Reset on `emit`.
-    bare_star: bool,
 }
 
 impl<'a> QueryLexer<'a> {
@@ -91,7 +80,6 @@ impl<'a> QueryLexer<'a> {
             pos: 0,
             start: 0,
             escape_positions: Vec::new(),
-            bare_star: false,
         }
     }
 
@@ -144,14 +132,11 @@ impl<'a> QueryLexer<'a> {
 
     fn emit(&mut self, type_: LexemeType) {
         let str = self.slice_string();
-        let wildcard = self.bare_star;
-        self.bare_star = false;
         self.lexemes.push(Lexeme {
             type_,
             str,
             start: self.start,
             end: self.pos,
-            wildcard,
         });
         self.start = self.pos;
     }
@@ -264,12 +249,6 @@ impl<'a> QueryLexer<'a> {
             if ch == '\\' {
                 self.escape_character();
                 continue;
-            }
-
-            // An unescaped `*` makes this lexeme a wildcard (recorded on
-            // `emit`). Stars consumed by `escape_character` never reach here.
-            if ch == '*' {
-                self.bare_star = true;
             }
 
             if ch == ':' {
@@ -528,12 +507,10 @@ impl<'a> QueryParser<'a> {
         // Normalize with the language's own rules (Turkish folds `I` to `ı`,
         // not `i`) so the query side agrees with what the indexer stored.
         // Normalization leaves `*` — and the `\` retained before an escaped
-        // star — untouched, so wildcard patterns survive. `use_pipeline` is
-        // set centrally in `Query::clause`; do not duplicate it here.
+        // star — untouched, so wildcard patterns survive. Wildcard detection
+        // happens centrally in `Query::clause` from the text itself, so there
+        // is exactly one rule and no flag to drift from the string.
         self.current_clause.term = normalize_for_language(self.language.code(), &lexeme.str);
-        // Only an unescaped star is a wildcard. An escaped `\*` stays literal
-        // text for exact lookup (its backslash is stripped at expansion).
-        self.current_clause.has_wildcard = lexeme.wildcard;
 
         let Some(next) = self.peek_lexeme() else {
             self.next_clause();
@@ -611,6 +588,11 @@ impl<'a> QueryParser<'a> {
             .str
             .parse::<f64>()
             .map_err(|_| self.error("boost must be numeric", &lexeme))?;
+        // `1e400` parses to infinity, which would silently become 1.0 in
+        // `Query::clause` and score exactly like no boost at all.
+        if !boost.is_finite() {
+            return Err(self.error("boost must be finite", &lexeme));
+        }
         self.current_clause.boost = boost;
 
         let Some(next) = self.peek_lexeme() else {
@@ -717,6 +699,19 @@ mod tests {
         let q = parse_query("hello^1e3", &fields(), sep(), &lang()).unwrap();
         assert_eq!(q.clauses.len(), 1);
         assert_eq!(q.clauses[0].boost, 1000.0);
+    }
+
+    #[test]
+    fn reject_infinite_boost() {
+        let err = parse_query("hello^1e400", &fields(), sep(), &lang()).unwrap_err();
+        assert!(err.message.contains("finite"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn reject_malformed_exponent_boost() {
+        // Fails closed: no phantom `e` clause.
+        let err = parse_query("hello^1e", &fields(), sep(), &lang()).unwrap_err();
+        assert!(err.message.contains("numeric"), "got: {}", err.message);
     }
 
     #[test]

@@ -59,13 +59,18 @@ pub fn write_index(snapshot: &IndexSnapshot<'_>) -> Vec<u8> {
     let doc_ids: HashMap<&str, u32> = doc_refs
         .iter()
         .enumerate()
-        .map(|(i, r)| (*r, i as u32))
+        .map(|(i, r)| (*r, u32::try_from(i).expect("doc count exceeds u32")))
         .collect();
     let field_ids: HashMap<&str, u32> = snapshot
         .fields
         .iter()
         .enumerate()
-        .map(|(i, f)| (f.as_str(), i as u32))
+        .map(|(i, f)| {
+            (
+                f.as_str(),
+                u32::try_from(i).expect("field count exceeds u32"),
+            )
+        })
         .collect();
 
     let terms: Vec<&String> = snapshot.inverted_index.keys().collect();
@@ -112,7 +117,11 @@ pub fn write_index(snapshot: &IndexSnapshot<'_>) -> Vec<u8> {
         positions_offset,
         end_offset,
     ] {
-        out.extend_from_slice(&(offset as u32).to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(offset)
+                .expect("index exceeds 4 GiB")
+                .to_le_bytes(),
+        );
     }
     debug_assert_eq!(out.len(), HEADER_LEN, "header must be exactly HEADER_LEN");
 
@@ -184,10 +193,10 @@ fn build_docs(
     let mut heap = Vec::new();
     let mut table: Vec<u32> = Vec::with_capacity(doc_refs.len() + 1);
     for doc_ref in doc_refs {
-        table.push(heap.len() as u32);
+        table.push(u32::try_from(heap.len()).expect("index exceeds 4 GiB"));
         heap.extend_from_slice(doc_ref.as_bytes());
     }
-    table.push(heap.len() as u32);
+    table.push(u32::try_from(heap.len()).expect("index exceeds 4 GiB"));
     for offset in &table {
         out.extend_from_slice(&offset.to_le_bytes());
     }
@@ -236,7 +245,7 @@ fn build_postings(
     let mut offsets: Vec<u32> = Vec::with_capacity(terms.len() + 1);
 
     for term in terms {
-        offsets.push(postings.len() as u32);
+        offsets.push(u32::try_from(postings.len()).expect("index exceeds 4 GiB"));
         let posting = &snapshot.inverted_index[*term];
 
         // Order the term's fields by id, and each field's documents by id, so
@@ -295,7 +304,7 @@ fn build_postings(
             }
         }
     }
-    offsets.push(postings.len() as u32);
+    offsets.push(u32::try_from(postings.len()).expect("index exceeds 4 GiB"));
 
     (postings, positions, offsets)
 }
@@ -354,7 +363,7 @@ fn build_terms(terms: &[&String], postings_offsets: &[u32]) -> Vec<u8> {
     let mut dictionary = Vec::new();
     let mut block_offsets: Vec<u32> = Vec::with_capacity(block_count + 1);
     for block in terms.chunks(TERMS_PER_BLOCK) {
-        block_offsets.push(dictionary.len() as u32);
+        block_offsets.push(u32::try_from(dictionary.len()).expect("index exceeds 4 GiB"));
         // The first term of each block is stored whole. That is what lets a
         // lookup binary search to a block and start decoding there instead of
         // from the beginning of the dictionary.
@@ -367,7 +376,7 @@ fn build_terms(terms: &[&String], postings_offsets: &[u32]) -> Vec<u8> {
             previous = term;
         }
     }
-    block_offsets.push(dictionary.len() as u32);
+    block_offsets.push(u32::try_from(dictionary.len()).expect("index exceeds 4 GiB"));
 
     let mut out =
         Vec::with_capacity((block_offsets.len() + postings_offsets.len()) * 4 + dictionary.len());
@@ -600,7 +609,7 @@ mod tests {
         let doc_ids: HashMap<&str, u32> = doc_refs
             .iter()
             .enumerate()
-            .map(|(i, r)| (*r, i as u32))
+            .map(|(i, r)| (*r, u32::try_from(i).expect("doc count exceeds u32")))
             .collect();
         let field_ids: HashMap<&str, u32> = fixture
             .fields

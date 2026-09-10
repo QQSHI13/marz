@@ -115,8 +115,14 @@ export async function load(
       // The status is the whole diagnosis here: a 404 means the build did not
       // emit the index, a 200 serving HTML means a dev server rewrote the path
       // to index.html, and both look identical from inside the reader.
+      // `Request` stringifies to `[object Request]`, so quote its URL instead.
+      const where =
+        typeof source !== "string" &&
+        typeof (source as Request).url === "string"
+          ? (source as Request).url
+          : String(source);
       throw new Error(
-        `could not fetch index from ${String(source)}: ` +
+        `could not fetch index from ${where}: ` +
           `${response.status} ${response.statusText}`,
       );
     }
@@ -127,14 +133,18 @@ export async function load(
 }
 
 /** Language codes this build supports. */
-export async function languages(): Promise<string[]> {
-  await initialize();
+export async function languages(
+  wasmSource?: WasmSource,
+): Promise<string[]> {
+  await initialize(wasmSource);
   return wasmLanguages();
 }
 
 /** The version of Marz this module was built from. */
-export async function version(): Promise<string> {
-  await initialize();
+export async function version(
+  wasmSource?: WasmSource,
+): Promise<string> {
+  await initialize(wasmSource);
   return wasmVersion();
 }
 
@@ -146,8 +156,9 @@ export async function version(): Promise<string> {
  */
 export async function indexLanguage(
   bytes: ArrayBuffer | Uint8Array,
+  wasmSource?: WasmSource,
 ): Promise<string> {
-  await initialize();
+  await initialize(wasmSource);
   return wasmIndexLanguage(
     bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
   );
@@ -169,8 +180,9 @@ export async function indexLanguage(
 export async function tokenize(
   text: string,
   language: string,
+  wasmSource?: WasmSource,
 ): Promise<string[]> {
-  await initialize();
+  await initialize(wasmSource);
   return wasmTokenize(text, language);
 }
 
@@ -186,8 +198,9 @@ export async function tokenize(
 export async function normalize(
   text: string,
   language?: string,
+  wasmSource?: WasmSource,
 ): Promise<string> {
-  await initialize();
+  await initialize(wasmSource);
   return wasmNormalize(text, language);
 }
 
@@ -261,12 +274,23 @@ export async function highlight(
   const spans: Array<[number, number]> = [];
   for (const fields of Object.values(hit.matches)) {
     for (const [start, length] of fields[field] ?? []) {
+      // Positions are code-point integers from the engine, but a caller-built
+      // hit may hold anything: fractional or non-finite spans would silently
+      // highlight the wrong slice (`slice` coerces), so skip them like
+      // out-of-range ones.
+      if (
+        !Number.isInteger(start) ||
+        !Number.isInteger(length) ||
+        start < 0 ||
+        length < 0 ||
+        start + length > points.length
+      ) {
+        continue;
+      }
       // A position past the end means the text passed in is not the text that
       // was indexed. Clamping would silently highlight the wrong span, so skip
       // it and leave the rest of the field readable.
-      if (start >= 0 && start + length <= points.length) {
-        spans.push([start, start + length]);
-      }
+      spans.push([start, start + length]);
     }
   }
 

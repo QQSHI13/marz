@@ -67,8 +67,18 @@ pub fn bm25_weight(
     doc_boost: f64,
 ) -> f64 {
     // Public function: callers other than `Index::score_term` offer no guard,
-    // and without this `avg == 0` yields `inf`/`NaN` scores.
-    if !tf.is_finite() || !avg_field_len.is_finite() || tf <= 0.0 || avg_field_len <= 0.0 {
+    // and without this `avg == 0` yields `inf`/`NaN` scores. Negative and
+    // non-finite inputs likewise cannot score: a negative length inverts the
+    // length norm, and a negative idf breaks the score >= 0 invariant.
+    if !tf.is_finite()
+        || !avg_field_len.is_finite()
+        || !field_len.is_finite()
+        || !idf.is_finite()
+        || tf <= 0.0
+        || avg_field_len <= 0.0
+        || field_len < 0.0
+        || idf < 0.0
+    {
         return 0.0;
     }
     if !idf.is_finite() || !field_boost.is_finite() || !doc_boost.is_finite() {

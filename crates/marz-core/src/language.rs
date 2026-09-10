@@ -59,8 +59,10 @@ pub type LanguageRef = Arc<dyn Language>;
 
 /// Combine several languages into one configuration.
 ///
-/// This follows the lunr-languages approach: each configured tokenizer runs,
-/// stop words are unioned, and stemmers are chained.
+/// This follows the lunr-languages approach: each configured tokenizer runs.
+/// Stop words and stemming are combined conservatively (see the method docs):
+/// a mixed index cannot know which language a token belongs to, so every rule
+/// errs toward keeping searchable text over deleting it.
 pub struct MultiLanguage {
     code: String,
     languages: Vec<LanguageRef>,
@@ -68,12 +70,16 @@ pub struct MultiLanguage {
 
 impl MultiLanguage {
     /// Create a multi-language configuration.
+    ///
+    /// The code joins members with `,` — never `-`, which variant codes like
+    /// `en-snowball` already contain — so [`crate::languages::resolve_multi`]
+    /// can split it back apart when reloading an index.
     pub fn new(languages: Vec<LanguageRef>) -> Self {
         let code = languages
             .iter()
             .map(|l| l.code())
             .collect::<Vec<_>>()
-            .join("-");
+            .join(",");
         Self { code, languages }
     }
 }
@@ -125,18 +131,89 @@ impl Language for MultiLanguage {
     }
 
     fn is_stop_word(&self, term: &str) -> bool {
-        self.languages.iter().any(|l| l.is_stop_word(term))
+        // Intersection, not union: a word that is a stop word in one member
+        // language may be content in another (`the` as a transliterated brand
+        // in Japanese text), and deleting content is the worse failure. Dense
+        // stop words cost index size, not correctness — BM25's IDF already
+        // scores near-universal terms near zero.
+        !self.languages.is_empty() && self.languages.iter().all(|l| l.is_stop_word(term))
     }
 
     fn stem(&self, term: &str) -> String {
-        let mut result = term.to_string();
+        // First stemmer that changes the term wins. Chaining every stemmer
+        // lets German mangle English output (`running` → `run` → …); applying
+        // at most one keeps each token in the language that claimed it.
+        let result = term.to_string();
         for lang in &self.languages {
-            result = lang.stem(&result);
+            let stemmed = lang.stem(&result);
+            if stemmed != result {
+                return stemmed;
+            }
         }
         result
     }
 
+    fn pipeline_labels(&self) -> Vec<&'static str> {
+        // Sorted union of member labels, so the combination is deterministic
+        // and `from_binary` can verify it. Member stemmer codes ride along
+        // (see `SnowballLanguage`), so a trimmed build fails loudly here.
+        let mut labels: Vec<&'static str> = self
+            .languages
+            .iter()
+            .flat_map(|l| l.pipeline_labels())
+            .collect();
+        labels.sort_unstable();
+        labels.dedup();
+        labels
+    }
+
     fn is_ngram_script(&self, c: char) -> bool {
         self.languages.iter().any(|l| l.is_ngram_script(c))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::languages::registry;
+
+    fn multi(codes: &str) -> LanguageRef {
+        registry::resolve_multi(codes).language
+    }
+
+    #[test]
+    fn multi_code_joins_with_comma() {
+        // Comma, never `-`: variant codes like `en-snowball` already contain
+        // dashes, so only a comma splits back apart on reload.
+        assert_eq!(multi("en,ja").code(), "en,ja");
+        assert_eq!(multi("en").code(), "en");
+    }
+
+    #[test]
+    #[cfg(feature = "de")]
+    fn stemming_stops_at_the_first_stemmer_that_changes() {
+        // Chaining would let German mangle English output (`run` → …).
+        let ml = multi("en,de");
+        assert_eq!(ml.stem("running"), "run");
+    }
+
+    #[test]
+    fn stop_words_need_every_language_to_agree() {
+        use crate::languages::English;
+        let en: LanguageRef = Arc::new(English);
+        assert!(en.is_stop_word("the"));
+        // …but `the` may be content (a brand, a transliteration) in the other
+        // member's text, so a mixed index keeps it. Dense stop words cost
+        // size, not correctness: IDF already scores them near zero.
+        assert!(!multi("en,ja").is_stop_word("the"));
+    }
+
+    #[test]
+    #[cfg(feature = "de")]
+    fn pipeline_labels_union_deterministically() {
+        let a = multi("en,de").pipeline_labels();
+        let b = multi("de,en").pipeline_labels();
+        assert_eq!(a, b, "member order must not change the labels");
+        assert!(a.contains(&"de"), "stemmer identity must ride along: {a:?}");
     }
 }

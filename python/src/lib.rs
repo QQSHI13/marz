@@ -43,16 +43,18 @@ create_exception!(
 
 /// Resolve a language code, warning when it is not one Marz implements.
 ///
-/// An unknown code does not raise. Marz implements forty-odd languages and the
-/// world has more: Vietnamese, Hebrew and Ukrainian all tokenize correctly on
-/// whitespace, they simply have no stemmer, so refusing them would block
-/// working languages to catch typos. See `marz_core::languages::registry`.
+/// A comma-separated list (`"en,ja"`) builds a multi-language configuration
+/// running each member's tokenizer. An unknown code does not raise. Marz
+/// implements forty-odd languages and the world has more: Vietnamese, Hebrew
+/// and Ukrainian all tokenize correctly on whitespace, they simply have no
+/// stemmer, so refusing them would block working languages to catch typos.
+/// See `marz_core::languages::registry`.
 ///
 /// A typo must not be silent either, so a fallback emits a `UserWarning` naming
 /// the code. A build script's output shows `unknown language code 'engish'`
 /// rather than quietly producing an index with no stemming.
 fn language_for(py: Python<'_>, code: &str) -> PyResult<Arc<dyn Language>> {
-    let resolved = registry::resolve(code);
+    let resolved = registry::resolve_multi(code);
     if !resolved.exact {
         PyErr::warn(
             py,
@@ -72,9 +74,10 @@ fn language_for(py: Python<'_>, code: &str) -> PyResult<Arc<dyn Language>> {
 ///
 /// Stored fallback codes (`vi`, `he`, …) are legitimate working indexes, not
 /// typos: warning on every `from_bytes` would spam build scripts that load
-/// per-language indexes in a loop.
+/// per-language indexes in a loop. Stored multi-language codes (`en,ja`)
+/// resolve back to the same combination.
 fn language_for_load(code: &str) -> Arc<dyn Language> {
-    registry::resolve(code).language
+    registry::resolve_multi(code).language
 }
 
 /// Language codes this build supports.
@@ -140,12 +143,18 @@ struct StagedDoc {
 fn query_error(py: Python<'_>, query: &str, error: &QueryParseError) -> PyErr {
     let err = QueryError::new_err(format!("{} in query {query:?}", error.message));
     let value = err.value(py);
-    // A failure here would mean the exception object rejected an attribute,
-    // which cannot happen for a normal exception class; ignore rather than
-    // masking the parse error with a second one.
-    let _ = value.setattr("start", error.start);
-    let _ = value.setattr("end", error.end);
-    let _ = value.setattr("query", query);
+    // Attribute assignment on a freshly created exception cannot fail in
+    // practice; expect loudly rather than returning an error that silently
+    // lacks its documented span.
+    value
+        .setattr("start", error.start)
+        .expect("exception attribute assignment");
+    value
+        .setattr("end", error.end)
+        .expect("exception attribute assignment");
+    value
+        .setattr("query", query)
+        .expect("exception attribute assignment");
     err
 }
 
@@ -210,8 +219,8 @@ impl IndexBuilder {
     ///
     /// Fields must be declared before the documents that use them: `add` only
     /// reads the fields declared at the time it is called. A negative `boost`
-    /// is clamped to `0.0` (it still matches, contributing no score); only a
-    /// non-finite boost raises.
+    /// is clamped to `0.0` at declaration (it still matches, contributing no
+    /// score); only a non-finite boost raises.
     ///
     /// Surrounding whitespace is not part of a name: it is trimmed before
     /// storing, so `field(" title ")` and `title:q` meet.
@@ -243,7 +252,7 @@ impl IndexBuilder {
                  pass a different ref_field to index it as text"
             )));
         }
-        self.fields.push((name.to_string(), boost));
+        self.fields.push((name.to_string(), boost.max(0.0)));
         Ok(())
     }
 
@@ -253,12 +262,13 @@ impl IndexBuilder {
     /// searchable fields may be absent or `None`. Adding the same reference
     /// twice replaces the previous document (upsert): old postings are dropped
     /// and the document count is not incremented. A negative `boost` is clamped
-    /// to `0.0`; only a non-finite boost raises.
+    /// to `0.0` at declaration; only a non-finite boost raises.
     #[pyo3(signature = (doc, boost = 1.0))]
     fn add(&mut self, doc: &Bound<'_, PyAny>, boost: f64) -> PyResult<()> {
         if !boost.is_finite() {
             return Err(PyValueError::new_err("boost must be a finite number"));
         }
+        let boost = boost.max(0.0);
         if self.fields.is_empty() {
             return Err(PyValueError::new_err(
                 "declare at least one field with field() before adding documents",
@@ -598,11 +608,18 @@ fn tokenize(py: Python<'_>, text: &str, language: &str) -> PyResult<Vec<String>>
 /// raw field.
 ///
 /// `language` selects the lowercasing rules and must be the index's language:
-/// Turkish (`"tr"`) folds `I` to `ı`, every other language to `i`.
+/// Turkish (`"tr"`) folds `I` to `ı`, every other language to `i`. Unknown
+/// codes warn and fall back exactly like `tokenize`.
 #[pyfunction]
 #[pyo3(signature = (text, language = "en"))]
-fn normalize(text: &str, language: &str) -> String {
-    marz_core::normalize::normalize_for_language(language.trim(), text)
+fn normalize(py: Python<'_>, text: &str, language: &str) -> PyResult<String> {
+    // Warn on unknown codes exactly like `tokenize` does; the fold itself
+    // dispatches on the trimmed code below.
+    let _ = language_for(py, language)?;
+    Ok(marz_core::normalize::normalize_for_language(
+        language.trim(),
+        text,
+    ))
 }
 
 /// Report what language an index was built for, without loading it.

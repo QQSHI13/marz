@@ -54,6 +54,7 @@ extern "C" {
 
 /// Resolve a language code, warning when it is not one Marz implements.
 ///
+/// A comma-separated list (`"en,ja"`) builds a multi-language configuration.
 /// An unknown code does not throw. Marz implements forty-odd languages and the
 /// world has more: Vietnamese, Hebrew and Ukrainian all tokenize correctly on
 /// whitespace, they simply have no stemmer, so refusing them would block
@@ -68,7 +69,7 @@ extern "C" {
 /// [`MarzIndex::load`], because a mismatch means the caller shipped the wrong
 /// file, which no amount of tokenization can recover from.
 fn language_for(code: &str) -> Arc<dyn Language> {
-    let resolved = registry::resolve(code);
+    let resolved = registry::resolve_multi(code);
     if !resolved.exact {
         console_warn(&format!(
             "marz: unknown language code {code:?}: searching with generic \
@@ -84,9 +85,10 @@ fn language_for(code: &str) -> Arc<dyn Language> {
 /// An index header legitimately stores fallback codes like `vi`/`he`/`uk`:
 /// they tokenize correctly on whitespace, they simply have no stemmer.
 /// Warning on every page load for a working index would train callers to ignore
-/// the warning that catches real typos at build time.
+/// the warning that catches real typos at build time. Stored multi-language
+/// codes (`en,ja`) resolve back to the same combination.
 fn language_for_load(code: &str) -> Arc<dyn Language> {
-    registry::resolve(code).language
+    registry::resolve_multi(code).language
 }
 
 /// Build a JavaScript `Error` to throw.
@@ -103,15 +105,20 @@ fn error(message: &str) -> JsValue {
 ///
 /// `Reflect::set` returns `Ok(false)` when a property is not writable. Every
 /// object written here was created by `Object::new` one line earlier, so a
-/// refusal cannot happen; propagating it would put a `?` on twenty lines to
-/// describe a state that does not exist.
-fn set(target: &js_sys::Object, key: &str, value: &JsValue) {
+/// refusal cannot happen — but silently dropping e.g. `ref` would ship an
+/// incomplete hit, so a refusal throws rather than vanishing.
+fn set(target: &js_sys::Object, key: &str, value: &JsValue) -> Result<(), JsValue> {
     let result = js_sys::Reflect::set(target, &JsValue::from_str(key), value);
     debug_assert!(
         matches!(result, Ok(true)),
         "Reflect::set failed for fresh object key {key:?}"
     );
-    let _ = result;
+    match result {
+        Ok(true) => Ok(()),
+        _ => Err(error(&format!(
+            "could not build search result (property {key:?})"
+        ))),
+    }
 }
 
 /// Language codes this build supports.
@@ -176,6 +183,8 @@ pub fn tokenize(text: &str, language: &str) -> Result<Vec<String>, JsValue> {
 #[wasm_bindgen(js_name = "normalize")]
 pub fn normalize(text: &str, language: Option<String>) -> String {
     let code = language.as_deref().unwrap_or("en");
+    // Warn on unknown codes exactly like `tokenize` does.
+    let _ = language_for(code);
     marz_core::normalize::normalize_for_language(code.trim(), text)
 }
 
@@ -280,7 +289,8 @@ impl MarzIndex {
     /// `limit` caps how many hits are converted to JavaScript objects. Scoring
     /// happens for the whole corpus either way — the cap saves building position
     /// maps for results past the first page, which is where the conversion cost
-    /// is.
+    /// is. Must be a non-negative integer (`-0.0` behaves as `0`); absurdly
+    /// large values clamp to "no limit" rather than allocating.
     ///
     /// Throws an `Error` if the query cannot be parsed. The error carries
     /// `query` plus `start` and `end` offsets into it, enough to underline the
@@ -322,8 +332,8 @@ impl MarzIndex {
         let out = js_sys::Array::new();
         for result in results.iter().take(take) {
             let hit = js_sys::Object::new();
-            set(&hit, "ref", &JsValue::from_str(&result.ref_id));
-            set(&hit, "score", &JsValue::from_f64(result.score));
+            set(&hit, "ref", &JsValue::from_str(&result.ref_id))?;
+            set(&hit, "score", &JsValue::from_f64(result.score))?;
 
             let matches = js_sys::Object::new();
             for (term, fields) in &result.match_data.terms {
@@ -336,11 +346,11 @@ impl MarzIndex {
                         span.push(&JsValue::from_f64(*length as f64));
                         spans.push(&span);
                     }
-                    set(&per_field, field, &spans);
+                    set(&per_field, field, &spans)?;
                 }
-                set(&matches, term, &per_field);
+                set(&matches, term, &per_field)?;
             }
-            set(&hit, "matches", &matches);
+            set(&hit, "matches", &matches)?;
             out.push(&hit);
         }
         Ok(out)

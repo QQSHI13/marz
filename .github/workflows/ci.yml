@@ -24,11 +24,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # No Cargo.lock is committed (library crate, see .gitignore), so checking
+      # against latest deps proves nothing about the declared MSRV: a new dep
+      # could require a newer rustc and fail here for the wrong reason — or
+      # pass by accident. Resolve minimum versions first (nightly-only flag),
+      # then check those exact versions on 1.78. Lib only: dev-dependencies
+      # are resolved but not built, so contributor tooling may float.
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo update -Z minimal-versions
       - uses: dtolnay/rust-toolchain@1.78
-      # No Cargo.lock is committed (library crate, see .gitignore), so no
-      # --locked: there is nothing to lock against. This only proves the code
-      # parses/checks on the declared MSRV, not reproducibility.
-      - run: cargo check -p marz-core
+      - run: cargo check -p marz-core --lib --locked --offline
 
   # The committed fixture must be what the generator produces. Without this the
   # two can drift: someone edits an expectation by hand to make a test pass, and
@@ -62,6 +67,21 @@ jobs:
             js/fixtures/corpus_ja.json js/fixtures/ja.marz ja
       - name: Fail if JS fixtures drifted
         run: git diff --exit-code -- js/fixtures/
+
+  stemmers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Regenerate stemmers from the pinned Snowball ref
+        run: bash scripts/vendor-stemmers.sh
+      # The generator emits unformatted code; committed files are formatted.
+      - name: Format generated code
+        run: cargo fmt --all
+      - name: Fail if generated code drifted from its source
+        run: git diff --exit-code -- crates/marz-core/src/stemmers/ SNOWBALL_REF
 
   python:
     runs-on: ubuntu-latest

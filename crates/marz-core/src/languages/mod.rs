@@ -17,5 +17,5 @@ pub use generic::Generic;
 pub use japanese::Japanese;
 pub use korean::Korean;
 pub use nonspacing::{NonSpacing, NON_SPACING_LANGUAGES};
-pub use registry::{codes, is_supported, resolve, Resolved};
+pub use registry::{codes, is_supported, resolve, resolve_multi, Resolved};
 pub use snowball::{SnowballLanguage, SNOWBALL_LANGUAGES};

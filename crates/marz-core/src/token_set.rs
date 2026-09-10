@@ -83,25 +83,31 @@ impl TokenSet {
         self.nodes[idx].final_ = true;
     }
 
-    /// Expand a query term. Exact terms return themselves if present.
-    /// Terms containing `*` return all matching index terms.
+    /// Expand a query term.
+    ///
+    /// Terms with an unescaped `*` return all matching index terms; anything
+    /// else is an exact lookup — including terms whose only stars are escaped
+    /// (`a\*b` looks up indexed `a*b`, never a pattern).
     pub fn expand(&self, term: &str) -> Vec<String> {
-        if term.contains('*') {
-            // Runs of `*` are equivalent to a single one, and collapsing them
-            // first keeps the pattern — and so the state space below — short.
-            let pattern = collapse_stars(term);
-            let mut walk = WildcardWalk {
-                pattern: pattern.chars().collect(),
-                visited: HashSet::new(),
-                results: Vec::new(),
-            };
-            walk.run(&self.nodes);
-            walk.results
-        } else if self.contains(term) {
-            vec![term.to_string()]
-        } else {
-            Vec::new()
+        if !crate::query::has_unescaped_wildcard(term) {
+            return self.expand_exact(&crate::query::unescape_term(term));
         }
+        // Runs of `*` are equivalent to a single one, and collapsing them
+        // first keeps the pattern — and so the state space below — short.
+        // Escaped stars ride along as a sentinel character so the walk treats
+        // them as literal text: collapsing and matching both key off bare
+        // `*` only. (A literal PUA char in indexed text would collide; no
+        // tokenizer emits one.)
+        const ESC_STAR: char = '\u{E000}';
+        let with_sentinels = term.replace("\\*", &ESC_STAR.to_string());
+        let pattern: Vec<char> = collapse_stars(&with_sentinels).chars().collect();
+        let mut walk = WildcardWalk {
+            pattern,
+            visited: HashSet::new(),
+            results: Vec::new(),
+        };
+        walk.run(&self.nodes);
+        walk.results
     }
 
     /// Exact lookup that never treats `*` as a wildcard.
@@ -167,12 +173,15 @@ impl TokenSet {
     /// unaffected — and turns `検索~2` back into `検索~1`, which is as much
     /// fuzziness as a two-character term can carry and still mean anything.
     pub fn expand_fuzzy(&self, term: &str, max_edits: usize) -> Vec<String> {
+        // Unescape first: a literal `*` is an ordinary matrix character here,
+        // not a pattern operator (the walk below has no wildcard branch).
+        let term = crate::query::unescape_term(term);
         let pattern: Vec<char> = term.chars().collect();
 
         // At least one character of the query must survive; see above.
         let max_edits = max_edits.min(pattern.len().saturating_sub(1));
         if max_edits == 0 {
-            return self.expand(term);
+            return self.expand_exact(&term);
         }
 
         // Row zero of the edit matrix: turning the empty candidate into the
@@ -213,6 +222,9 @@ impl WildcardWalk {
     /// Match `pattern[at..]` against the subtree at `nodes[node]`, whose path
     /// from the root spells `prefix`.
     ///
+    /// The sentinel `\u{E000}` (see [`TokenSet::expand`]) matches a literal
+    /// `*` edge; results always quote indexed text, so it never leaks out.
+    ///
     /// # Why the visited set is needed
     ///
     /// A `*` may consume any number of characters, so two adjacent stars can
@@ -249,10 +261,19 @@ impl WildcardWalk {
                     extended.push(*edge_ch);
                     stack.push((*child, at, extended));
                 }
-            } else if let Some(child) = node.edges.get(&self.pattern[at]) {
-                let mut extended = prefix;
-                extended.push(self.pattern[at]);
-                stack.push((*child, at + 1, extended));
+            } else {
+                // Literal match — including the escaped-star sentinel, which
+                // quotes the indexed `*` it stood for, never itself.
+                let want = if self.pattern[at] == '\u{E000}' {
+                    '*'
+                } else {
+                    self.pattern[at]
+                };
+                if let Some(child) = node.edges.get(&want) {
+                    let mut extended = prefix;
+                    extended.push(want);
+                    stack.push((*child, at + 1, extended));
+                }
             }
         }
     }

@@ -39,11 +39,10 @@ pub struct Clause {
     pub use_pipeline: bool,
     /// Whether the term holds an unescaped `*` wildcard.
     ///
-    /// Set by the query parser from the lexeme (escaped `\*` stays literal)
-    /// or, for programmatically built clauses, derived from the term in
-    /// [`Query::clause`]. Drives both pipeline disabling and wildcard
-    /// expansion — never infer it from `term.contains('*')`, which cannot
-    /// tell `\*` apart from `*`.
+    /// Derived from the term text in [`Query::clause`] — by the single rule
+    /// "unescaped `*` counts, `\` + `*` is literal" — never set by hand.
+    /// Drives both pipeline disabling and wildcard expansion, so the two can
+    /// never disagree about what counts as a wildcard.
     pub has_wildcard: bool,
     /// Automatic wildcard configuration.
     pub wildcard: Wildcard,

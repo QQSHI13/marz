@@ -49,6 +49,10 @@ pub struct FieldPostings {
 #[derive(Debug, Clone)]
 pub struct TermPostings {
     /// Distinct documents containing the term across all fields — BM25's `df`.
+    ///
+    /// Advisory: read straight from the file without validation. `Index`
+    /// recomputes it from the decoded entries instead of trusting this, and
+    /// direct `BinaryIndex` consumers doing their own scoring should too.
     pub document_frequency: u32,
     /// Per-field postings, ascending by field id.
     pub fields: Vec<FieldPostings>,
@@ -634,15 +638,21 @@ impl<'a> BinaryIndex<'a> {
             .ok_or(FormatError::Truncated {
                 section: "positions",
             })?;
-        // Every position costs at least its delta varint.
-        if (count as usize) > slice.len() {
+        // Every position costs at least its delta varint — two varints when
+        // lengths vary. A count exceeding the remaining bytes is corrupt.
+        let mut cursor = Cursor::new(slice, "positions");
+        let uniform_length = cursor.read_usize()?;
+        let per_position = if uniform_length == 0 { 2 } else { 1 };
+        // (`checked_mul` with a match, not `is_none_or`: MSRV is 1.78.)
+        let over_budget = match (count as usize).checked_mul(per_position) {
+            Some(need) => need > slice.len(),
+            None => true,
+        };
+        if over_budget {
             return Err(FormatError::Truncated {
                 section: "positions",
             });
         }
-        let mut cursor = Cursor::new(slice, "positions");
-        let uniform_length = cursor.read_usize()?;
-        let per_position = if uniform_length == 0 { 2 } else { 1 };
         for _ in 0..count as usize * per_position {
             cursor.read_varint()?;
         }
@@ -668,16 +678,21 @@ impl<'a> BinaryIndex<'a> {
                 .ok_or(FormatError::Truncated {
                     section: "positions",
                 })?;
-        // Every position costs at least its delta varint: a count exceeding
-        // the remaining bytes is corrupt, and `Vec::with_capacity` below
-        // would abort on the huge allocation rather than error.
-        if (entry.position_count as usize) > slice.len() {
+        // Every position costs at least its delta varint — two varints when
+        // lengths vary — and `Vec::with_capacity` below would abort on a
+        // huge allocation rather than error.
+        let mut cursor = Cursor::new(slice, "positions");
+        let uniform_length = cursor.read_usize()?;
+        let per_position = if uniform_length == 0 { 2 } else { 1 };
+        let over_budget = match (entry.position_count as usize).checked_mul(per_position) {
+            Some(need) => need > slice.len(),
+            None => true,
+        };
+        if over_budget {
             return Err(FormatError::Truncated {
                 section: "positions",
             });
         }
-        let mut cursor = Cursor::new(slice, "positions");
-        let uniform_length = cursor.read_usize()?;
 
         let mut out = Vec::with_capacity(entry.position_count as usize);
         let mut start = 0usize;
@@ -823,7 +838,7 @@ mod tests {
         let index = BinaryIndex::open(&bytes).unwrap();
 
         // Sorted order, and a docref full of slashes must come back intact —
-        // this is exactly what the JSON FieldRef parsing got wrong.
+        // references are interned whole, never split on `/`.
         assert_eq!(index.doc_ref(0), Ok("guide/a/index.html"));
         assert_eq!(index.doc_ref(1), Ok("guide/b/index.html"));
         assert_eq!(index.doc_ref(2), Ok("zzz-last"));

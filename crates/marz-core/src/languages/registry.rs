@@ -68,6 +68,40 @@ pub fn resolve(code: &str) -> Resolved {
     }
 }
 
+/// Resolve a possibly multi-language code to its analysis rules.
+///
+/// A comma-separated list (`"en,ja"`) builds a [`MultiLanguage`] running each
+/// member's tokenizer, so one index can serve translated pages. A single code
+/// behaves exactly like [`resolve`]. The comma is unambiguous: no language
+/// code contains one (unlike `-`, which variant codes like `en-snowball`
+/// already use — which is why [`MultiLanguage`] joins with `,`).
+///
+/// Never fails. `exact` is true only when every member resolved exactly.
+pub fn resolve_multi(code: &str) -> Resolved {
+    use crate::language::MultiLanguage;
+
+    let parts: Vec<&str> = code
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() <= 1 {
+        return resolve(code);
+    }
+
+    let mut languages = Vec::with_capacity(parts.len());
+    let mut exact = true;
+    for part in parts {
+        let resolved = resolve(part);
+        exact &= resolved.exact;
+        languages.push(resolved.language);
+    }
+    Resolved {
+        language: Arc::new(MultiLanguage::new(languages)),
+        exact,
+    }
+}
+
 /// Resolve a code, or `None` if Marz has no implementation for it.
 fn exact(code: &str) -> Option<LanguageRef> {
     // The hand-written languages come first: `en` must reach the Porter
@@ -237,6 +271,33 @@ mod tests {
         // Tokenization still works; only stemming is absent.
         assert_eq!(r.language.stem("running"), "running");
         assert_eq!(r.language.tokenize("hello world").len(), 2);
+    }
+
+    #[test]
+    fn comma_list_builds_a_multi_language() {
+        let r = resolve_multi("en,ja");
+        assert!(r.exact);
+        assert_eq!(r.language.code(), "en,ja");
+        // Each side tokenizes by its own rules in one index.
+        let terms: Vec<String> = r
+            .language
+            .tokenize("hello 検索")
+            .into_iter()
+            .map(|t| t.term)
+            .collect();
+        assert!(terms.contains(&"hello".to_string()), "got {terms:?}");
+        assert!(terms.contains(&"検索".to_string()), "got {terms:?}");
+    }
+
+    #[test]
+    #[cfg(feature = "de")]
+    fn multi_exactness_requires_every_member() {
+        assert!(resolve_multi("en,de").exact);
+        assert!(!resolve_multi("en,engish").exact);
+        // Single codes behave exactly like `resolve`.
+        assert!(resolve_multi("en").exact);
+        assert!(!resolve_multi("engish").exact);
+        assert_eq!(resolve_multi("").language.code(), "");
     }
 
     /// Vietnamese is the case the fallback is *for*, not a typo.

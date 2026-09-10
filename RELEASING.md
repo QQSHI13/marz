@@ -144,7 +144,7 @@ assert the tarball contains `pkg/marz_wasm_bg.wasm`. To check by hand:
 cd js && npm run build && npm pack --dry-run
 ```
 
-Expect ~8 files and ~98 kB, including a 175 KB `pkg/marz_wasm_bg.wasm`. If you
+Expect ~10 files and ~225 kB, including a ~550 KB `pkg/marz_wasm_bg.wasm`. If you
 see 5 files and 6 kB, the engine is missing — do not publish.
 
 ## What cannot be undone

@@ -8,7 +8,15 @@ fn main() {
     let (input, output, lang) = (&args[1], &args[2], &args[3]);
     let raw = std::fs::read_to_string(input).unwrap();
     let docs: Vec<serde_json::Map<String, serde_json::Value>> = serde_json::from_str(&raw).unwrap();
-    let language: Arc<dyn Language> = registry::resolve(lang).language;
+    // Fail loudly on a typoed language: resolving silently falls back to
+    // generic tokenization, and the baked fixture would then pin the wrong
+    // behavior into every JS test run.
+    let resolved = registry::resolve(lang);
+    if !resolved.exact {
+        eprintln!("unknown language code {lang:?}: refusing to bake a fixture");
+        std::process::exit(1);
+    }
+    let language: Arc<dyn Language> = resolved.language;
     let mut b = IndexBuilder::new(language);
     b.ref_field("location")
         .field("title", 10.0)

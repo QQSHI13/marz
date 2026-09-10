@@ -105,15 +105,7 @@ impl Language for SnowballLanguage {
         // erroring, which is the kind of bug that surfaces as "search works
         // except for capitalized words".
         let lowered = if self.code == "tr" {
-            let mut s = String::with_capacity(term.len());
-            for c in term.chars() {
-                match c {
-                    'I' => s.push('ı'),
-                    'İ' => s.push('i'),
-                    _ => s.extend(c.to_lowercase()),
-                }
-            }
-            s
+            crate::normalize::turkish_lowercase(term)
         } else {
             term.to_lowercase()
         };

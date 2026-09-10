@@ -272,9 +272,14 @@ impl IndexBuilder {
 
     /// Add a field to the index. `boost` defaults to `1.0`.
     ///
-    /// Panics on an empty name or one containing `/`: field names are serialized
-    /// as `field/doc` in JSON, so a `/` never round-trips, and an empty name is
-    /// always a configuration bug. Failing fast beats a silently corrupt index.
+    /// Declaring the same name twice keeps the first declaration and ignores
+    /// the second (no double-counting). The Python and WASM bindings reject
+    /// duplicates with an error instead — same outcome for well-formed
+    /// configurations, louder for mistakes.
+    ///
+    /// Panics on an empty name or one containing `/`: a `/` breaks `FieldRef`
+    /// round-tripping, and an empty name is always a configuration bug.
+    /// Failing fast beats a silently corrupt index.
     /// Non-finite boosts fall back to `1.0`; negative boosts clamp to `0.0`
     /// (they still match, contributing no score).
     pub fn field(&mut self, name: impl Into<String>, boost: f64) -> &mut Self {
@@ -1251,5 +1256,88 @@ mod tests {
             Index::from_binary(&bytes, unstemmed),
             Err(crate::binary::FormatError::PipelineMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn escaped_star_with_fuzzy_is_exact_on_the_literal() {
+        // `~0` must behave like the exact lookup: `a\*b~0` finds indexed
+        // `a*b` and nothing else.
+        use crate::languages::Korean;
+        let ko: LanguageRef = std::sync::Arc::new(Korean);
+        let mut builder = IndexBuilder::new(ko);
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("star", 1.0, |_| Some("a*b test".to_string()));
+        builder.add("other", 1.0, |_| Some("axb test".to_string()));
+        let index = builder.build();
+        let hits = index.search(r"a\*b~1").unwrap();
+        assert!(
+            hits.iter().any(|h| h.ref_id == "star"),
+            "fuzzy escaped star must find the literal term"
+        );
+    }
+
+    #[test]
+    fn mixed_escaped_and_bare_stars_combine() {
+        // Literal `a*b` prefix plus a trailing wildcard: matches `a*b...`
+        // terms, not every `a…` term.
+        use crate::languages::Korean;
+        let ko: LanguageRef = std::sync::Arc::new(Korean);
+        let mut builder = IndexBuilder::new(ko);
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("star", 1.0, |_| Some("a*b test".to_string()));
+        builder.add("other", 1.0, |_| Some("axb test".to_string()));
+        let index = builder.build();
+        let hits = index.search(r"a\*b*").unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "literal prefix plus wildcard must match only a*b terms"
+        );
+        assert_eq!(hits[0].ref_id, "star");
+    }
+
+    #[test]
+    fn stale_wildcard_flag_does_not_disable_stemming() {
+        // A programmatically set `has_wildcard` with no `*` in the term is
+        // cleared: `running` must still stem to indexed `run`.
+        use crate::query::{Clause, Query};
+        let mut builder = IndexBuilder::new(en());
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("a", 1.0, |_| Some("running running".to_string()));
+        let index = builder.build();
+        let mut query = Query::new(vec!["body".to_string()]);
+        query.clause(Clause {
+            term: "running".to_string(),
+            has_wildcard: true,
+            ..Clause::default()
+        });
+        let hits = index.query(&query);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].ref_id, "a");
+    }
+
+    #[test]
+    fn empty_term_matches_nothing() {
+        use crate::query::{Clause, Query};
+        let index = test_index();
+        let mut query = Query::new(vec!["title".to_string(), "body".to_string()]);
+        query.clause(Clause {
+            term: String::new(),
+            wildcard: crate::query::Wildcard::Trailing,
+            ..Clause::default()
+        });
+        assert!(index.query(&query).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "field name must not be empty")]
+    fn empty_field_name_panics() {
+        IndexBuilder::new(en()).field("", 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "must not contain '/'")]
+    fn slash_field_name_panics() {
+        IndexBuilder::new(en()).field("a/b", 1.0);
     }
 }

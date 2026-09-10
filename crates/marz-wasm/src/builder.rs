@@ -124,8 +124,8 @@ impl MarzBuilder {
     ///
     /// Fields must be declared before the documents that use them: `add` reads
     /// only the fields declared when it is called. A negative `boost` is
-    /// clamped to `0.0` (it still matches, contributing no score); only a
-    /// non-finite boost throws.
+    /// clamped to `0.0` at declaration (it still matches, contributing no
+    /// score); only a non-finite boost throws.
     ///
     /// Surrounding whitespace is not part of a name: it is trimmed before
     /// storing, so `field(" title ")` and `title:q` meet.
@@ -165,7 +165,7 @@ impl MarzBuilder {
     /// The reference field must be present and a string; searchable fields may
     /// be absent, `null` or `undefined`. Adding the same reference twice
     /// replaces the previous document (upsert). A negative `boost` is clamped
-    /// to `0.0`; only a non-finite boost throws.
+    /// to `0.0` at declaration; only a non-finite boost throws.
     pub fn add(&mut self, doc: &JsValue, boost: Option<f64>) -> Result<(), JsValue> {
         if !doc.is_object() {
             return Err(error("document must be an object"));

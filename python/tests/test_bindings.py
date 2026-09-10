@@ -523,6 +523,25 @@ class TestTypeStubs:
         assert issubclass(marz.QueryError, ValueError)
         assert issubclass(marz.FormatError, ValueError)
 
+    def test_stub_signatures_match_runtime_defaults(self):
+        # Names alone would let a changed default lie to type-checkers: pin
+        # the defaults structually (PyO3 renders no annotations here).
+        import inspect
+
+        params = inspect.signature(marz.normalize).parameters
+        assert list(params) == ["text", "language"]
+        assert params["language"].default == "en"
+
+        params = inspect.signature(marz.Index.to_bytes).parameters
+        assert params["positions"].kind == inspect.Parameter.KEYWORD_ONLY
+        assert params["positions"].default is True
+
+        params = inspect.signature(marz.Index.from_bytes).parameters
+        assert params["language"].default is None
+
+        assert inspect.signature(marz.IndexBuilder.field).parameters["boost"].default == 1.0
+        assert inspect.signature(marz.IndexBuilder.add).parameters["boost"].default == 1.0
+
 
 class TestCjk:
     def test_a_cjk_query_finds_the_document_without_a_dictionary(self):
@@ -579,6 +598,10 @@ class TestNormalize:
     def test_normalize_folds_width_and_case(self):
         assert marz.normalize("ＲＵＳＴ") == "rust"
         assert marz.normalize("ｶﾞｲﾄﾞ") == "ガイド"
+
+    def test_normalize_warns_on_unknown_language(self):
+        with pytest.warns(UserWarning, match="klingon"):
+            assert marz.normalize("Hello", "klingon") == "hello"
 
     def test_match_offsets_index_the_normalized_text(self):
         # Half-width katakana composes, shifting every later offset: highlight
