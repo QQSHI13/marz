@@ -256,8 +256,9 @@ export async function highlight(
   field: string,
   text: string,
   language?: string,
+  wasmSource?: WasmSource,
 ): Promise<Segment[]> {
-  await initialize();
+  await initialize(wasmSource);
   if (!hit || typeof (hit as SearchResult).matches !== "object" || (hit as SearchResult).matches === null) {
     throw new Error("highlight: hit.matches must be an object");
   }
@@ -273,7 +274,18 @@ export async function highlight(
 
   const spans: Array<[number, number]> = [];
   for (const fields of Object.values(hit.matches)) {
-    for (const [start, length] of fields[field] ?? []) {
+    const spansForField: unknown = fields[field] ?? [];
+    // Caller-built hits may hold anything here: a non-array (or a pair that
+    // is not a [start, length] pair) would throw in the loop below, and
+    // search-result rendering must never throw on shape.
+    if (!Array.isArray(spansForField)) {
+      continue;
+    }
+    for (const pair of spansForField) {
+      if (!Array.isArray(pair) || pair.length !== 2) {
+        continue;
+      }
+      const [start, length] = pair;
       // Positions are code-point integers from the engine, but a caller-built
       // hit may hold anything: fractional or non-finite spans would silently
       // highlight the wrong slice (`slice` coerces), so skip them like

@@ -141,8 +141,10 @@ impl MarzBuilder {
             )));
         }
         // The builder only stores the code; resolve for the separator set.
-        // (Core asserts the same predicate as a backstop.)
-        let separators = marz_core::languages::registry::resolve(&self.language_code)
+        // Multi-language codes resolve to the union (same rule as search),
+        // so validation agrees with indexing. (Core asserts the same
+        // predicate as a backstop.)
+        let separators = marz_core::languages::registry::resolve_multi(&self.language_code)
             .language
             .separator_chars()
             .to_string();
@@ -152,6 +154,14 @@ impl MarzBuilder {
         {
             return Err(error(&format!(
                 "field {name:?} contains a separator and is unqueryable via field: syntax"
+            )));
+        }
+        if name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
+            || matches!(name.chars().next(), Some('+' | '-'))
+        {
+            return Err(error(&format!(
+                "field {name:?} contains a query operator and is unqueryable \
+                 via field:term syntax"
             )));
         }
         if self.fields.iter().any(|(existing, _)| existing == name) {

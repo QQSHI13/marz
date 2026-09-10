@@ -104,6 +104,11 @@ class TestBuilder:
         with pytest.warns(UserWarning, match='unknown language code "xx"'):
             marz.IndexBuilder("xx")
 
+    def test_multi_warning_names_the_bad_member(self):
+        # The working member must not be smeared: name `engish`, not the list.
+        with pytest.warns(UserWarning, match="engish in"):
+            marz.IndexBuilder("en,engish")
+
     def test_documents_need_a_field_to_be_indexed_into(self):
         builder = marz.IndexBuilder("en")
         with pytest.raises(ValueError, match="declare at least one field"):

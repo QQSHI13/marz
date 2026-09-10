@@ -71,8 +71,25 @@ extern "C" {
 fn language_for(code: &str) -> Arc<dyn Language> {
     let resolved = registry::resolve_multi(code);
     if !resolved.exact {
+        // Name the offending members for multi codes; a lone code keeps the
+        // historical message verbatim.
+        let parts = registry::canonical_parts(code);
+        let detail = if parts.len() <= 1 {
+            format!("{code:?}")
+        } else {
+            let unknown: Vec<&str> = parts
+                .iter()
+                .filter(|part| !registry::is_supported(part))
+                .map(|part| part.as_str())
+                .collect();
+            if unknown.is_empty() {
+                format!("{code:?}")
+            } else {
+                format!("{} in {code:?}", unknown.join(", "))
+            }
+        };
         console_warn(&format!(
-            "marz: unknown language code {code:?}: searching with generic \
+            "marz: unknown language code {detail}: searching with generic \
              whitespace tokenization and no stemming. \
              Call languages() for the codes with full support."
         ));

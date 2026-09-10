@@ -31,6 +31,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::language::LanguageRef;
+use crate::normalize::{normalize_for_language, normalize_tr};
 use crate::phrase::{extract_phrases, Phrase, VerificationCache, PHRASE_BOOST};
 use crate::pipeline::Pipeline;
 use crate::query::{Presence, Query};
@@ -294,6 +295,12 @@ impl IndexBuilder {
                 .any(|c| c.is_whitespace() || self.language.separator_chars().contains(c)),
             "field name {name:?} contains a separator and is unqueryable"
         );
+        assert!(
+            !name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
+                && !matches!(name.chars().next(), Some('+' | '-')),
+            "field name {name:?} contains a query operator and is unqueryable \
+             via field:term syntax"
+        );
         debug_assert!(
             name != self.ref_field,
             "indexing the reference field inflates scores; the bindings reject this"
@@ -514,6 +521,11 @@ impl Index {
     }
 
     /// Execute a programmatic [`Query`] against the index.
+    ///
+    /// Unlike the string parser (which rejects unknown `field:` scopes with
+    /// [`QueryParseError`](crate::query_parser::QueryParseError)), a clause
+    /// scoped to a field the index does not have simply matches nothing.
+    /// Validate scopes up front if silence would hide a caller bug.
     pub fn query(&self, query: &Query) -> Vec<SearchResult> {
         self.execute_query(query)
     }
@@ -578,6 +590,24 @@ impl Index {
             doc_boost,
         );
         weight * boost
+    }
+
+    /// Fold bypass terms (pipeline disabled) the way the parser would have.
+    ///
+    /// Parsed clauses arrive pre-folded; programmatic ones arrive raw. A lone
+    /// default fold would additionally lose Turkish in multi-language indexes,
+    /// so a `tr` member unions both folds.
+    fn bypass_terms(language: &LanguageRef, raw: &str) -> Vec<String> {
+        let code = language.code();
+        let mut out = vec![normalize_for_language(code, raw)];
+        let multi_with_tr = code.contains(',') && code.split(',').any(|c| c.trim() == "tr");
+        if multi_with_tr {
+            let turkish = normalize_tr(raw);
+            if turkish != out[0] {
+                out.push(turkish);
+            }
+        }
+        out
     }
 
     /// Expand a clause term into the set of indexed terms it matches.
@@ -668,7 +698,12 @@ impl Index {
                 let terms: Vec<String> = tokens.into_iter().map(|t| t.term).collect();
                 (terms, phrases)
             } else {
-                (vec![clause.term.clone()], Vec::new())
+                // No pipeline means no second fold: normalize the raw text here
+                // so programmatic clauses (`HELLO*`) behave like parsed ones,
+                // and multi-language indexes cover every member's folding
+                // (`Istanbul` must meet both `istanbul` and `ıstanbul`).
+                // Width folding and case mapping never touch `*` or `\`.
+                (Self::bypass_terms(&language, &clause.term), Vec::new())
             };
 
             // Collect the expansions for this clause, deduplicated. A wildcard
@@ -1292,7 +1327,9 @@ mod tests {
     #[test]
     fn escaped_star_with_fuzzy_is_exact_on_the_literal() {
         // `~0` must behave like the exact lookup: `a\*b~0` finds indexed
-        // `a*b` and nothing else.
+        // `a*b` and nothing else. With `~N>0` the `*` is an ordinary matrix
+        // character, so one substitution still reaches `axb` — fuzzy, not
+        // exact, and documented as such in the query syntax.
         use crate::languages::Korean;
         let ko: LanguageRef = std::sync::Arc::new(Korean);
         let mut builder = IndexBuilder::new(ko);
@@ -1300,6 +1337,14 @@ mod tests {
         builder.add("star", 1.0, |_| Some("a*b test".to_string()));
         builder.add("other", 1.0, |_| Some("axb test".to_string()));
         let index = builder.build();
+        let exact = index.search(r"a\*b~0").unwrap();
+        assert_eq!(
+            exact.len(),
+            1,
+            "~0 on a literal must be exclusive, got {:?}",
+            exact.iter().map(|h| &h.ref_id).collect::<Vec<_>>()
+        );
+        assert_eq!(exact[0].ref_id, "star");
         let hits = index.search(r"a\*b~1").unwrap();
         assert!(
             hits.iter().any(|h| h.ref_id == "star"),

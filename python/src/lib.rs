@@ -56,11 +56,30 @@ create_exception!(
 fn language_for(py: Python<'_>, code: &str) -> PyResult<Arc<dyn Language>> {
     let resolved = registry::resolve_multi(code);
     if !resolved.exact {
+        // Name the offending members, not the whole list: `"en,engish"`
+        // builds a working multi index whose `engish` member merely lacks a
+        // stemmer, which is a different fact from "everything is generic".
+        // A lone code keeps the historical message verbatim.
+        let parts = registry::canonical_parts(code);
+        let detail = if parts.len() <= 1 {
+            format!("{code:?}")
+        } else {
+            let unknown: Vec<&str> = parts
+                .iter()
+                .filter(|part| !registry::is_supported(part))
+                .map(|part| part.as_str())
+                .collect();
+            if unknown.is_empty() {
+                format!("{code:?}")
+            } else {
+                format!("{} in {code:?}", unknown.join(", "))
+            }
+        };
         PyErr::warn(
             py,
             &py.get_type::<pyo3::exceptions::PyUserWarning>(),
             &std::ffi::CString::new(format!(
-                "unknown language code {code:?}: indexing with generic \
+                "unknown language code {detail}: indexing with generic \
                  whitespace tokenization and no stemming. \
                  Call marz.languages() for the codes with full support."
             ))?,
@@ -245,6 +264,14 @@ impl IndexBuilder {
         {
             return Err(PyValueError::new_err(format!(
                 "field {name:?} contains a separator and is unqueryable via field: syntax"
+            )));
+        }
+        if name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
+            || matches!(name.chars().next(), Some('+' | '-'))
+        {
+            return Err(PyValueError::new_err(format!(
+                "field {name:?} contains a query operator and is unqueryable \
+                 via field:term syntax"
             )));
         }
         if !boost.is_finite() {

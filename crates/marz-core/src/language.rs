@@ -66,6 +66,11 @@ pub type LanguageRef = Arc<dyn Language>;
 pub struct MultiLanguage {
     code: String,
     languages: Vec<LanguageRef>,
+    /// Union of member separator sets, in first-seen order.
+    ///
+    /// Stored, not computed per call: separators feed both indexing-time
+    /// field validation and query-time lexing, which must agree.
+    separators: String,
 }
 
 impl MultiLanguage {
@@ -87,7 +92,19 @@ impl MultiLanguage {
             .map(|l| l.code())
             .collect::<Vec<_>>()
             .join(",");
-        Self { code, languages }
+        let mut separators = String::new();
+        for lang in &languages {
+            for ch in lang.separator_chars().chars() {
+                if !separators.contains(ch) {
+                    separators.push(ch);
+                }
+            }
+        }
+        Self {
+            code,
+            languages,
+            separators,
+        }
     }
 }
 
@@ -163,6 +180,13 @@ impl Language for MultiLanguage {
             }
         }
         result
+    }
+
+    fn separator_chars(&self) -> &str {
+        // Union of member sets (computed in `new`): validation and lexing
+        // must split on the same characters or fields become unqueryable on
+        // one side only.
+        &self.separators
     }
 
     fn pipeline_labels(&self) -> Vec<&'static str> {
