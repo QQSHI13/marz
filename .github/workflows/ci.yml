@@ -32,7 +32,7 @@ jobs:
       # are resolved but not built, so contributor tooling may float.
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo update -Z minimal-versions
-      - uses: dtolnay/rust-toolchain@1.78
+      - uses: dtolnay/rust-toolchain@1.120
       # --locked pins the minimal versions resolved above; network stays on
       # so cargo can fill its cache (an --offline flag fails here when the
       # .crate files were never downloaded).
