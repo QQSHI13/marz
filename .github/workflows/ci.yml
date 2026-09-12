@@ -203,12 +203,13 @@ jobs:
           raw=$(stat -c %s js/pkg/marz_wasm_bg.wasm)
           gz=$(gzip -9 -c js/pkg/marz_wasm_bg.wasm | wc -c)
           echo "wasm: $raw bytes raw, $gz bytes gzipped" >> "$GITHUB_STEP_SUMMARY"
-          # 550,449 raw as of Sep 2026: the floor moved with toolchain drift
-          # and 37 stemmers, not with anything anyone did wrong. ~25KB of
-          # headroom tolerates dependency float while still catching a
-          # silently unoptimized build, which costs tens of KB at this size.
-          # Raise it and update the README together.
-          limit=575000
+          # 576,895 raw as of Sep 2026: four rounds of query-time machinery
+          # (fold-union scoring, escape parity, multi-language plumbing) on top
+          # of toolchain drift and 37 stemmers. Honest weight, not an accident:
+          # ~4% headroom still catches a silently unoptimized build, which
+          # costs tens of KB at this size. Raise it and update the README
+          # together.
+          limit=600000
           if [ "$raw" -gt "$limit" ]; then
             echo "::error::wasm is $raw bytes, over the $limit byte limit." \
                  "If wasm-opt failed above, that is the cause." >&2

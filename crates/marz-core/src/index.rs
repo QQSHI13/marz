@@ -710,60 +710,59 @@ impl Index {
             // Each term carries an optional (union, fold) identity (see
             // `Contribution::fold`): `None` sums exactly as before; unions of
             // one intent maximize across folds per document-field.
-            let (terms, phrases, folds): ClauseTerms =
-                if clause.use_pipeline {
-                    let tokens = self.pipeline.run_search(&clause.term);
-                    let phrases = extract_phrases(&tokens, &language);
-                    let terms: Vec<String> = tokens.iter().map(|t| t.term.clone()).collect();
-                    let folds = if crate::normalize::uses_raw_passthrough(language.code()) {
-                        // Same start offset = same source word in two folds:
-                        // one union per offset, one fold per token, so the
-                        // best fold wins instead of summing. Distinct offsets
-                        // (CJK bigrams et al.) and positionless tokens stand
-                        // alone and sum as before.
-                        let mut unions: HashMap<usize, usize> = HashMap::new();
-                        let mut counts: HashMap<usize, usize> = HashMap::new();
-                        let mut next_union = 0usize;
-                        tokens
-                            .iter()
-                            .map(|t| match t.position().map(|(s, _)| s) {
-                                Some(start) => {
-                                    let union = *unions.entry(start).or_insert_with(|| {
-                                        let id = next_union;
-                                        next_union += 1;
-                                        id
-                                    });
-                                    let fold = counts.entry(union).or_insert(0);
-                                    let mine = *fold;
-                                    *fold += 1;
-                                    Some((union, mine))
-                                }
-                                None => None,
-                            })
-                            .collect()
-                    } else {
-                        vec![None; tokens.len()]
-                    };
-                    (terms, phrases, folds)
+            let (terms, phrases, folds): ClauseTerms = if clause.use_pipeline {
+                let tokens = self.pipeline.run_search(&clause.term);
+                let phrases = extract_phrases(&tokens, &language);
+                let terms: Vec<String> = tokens.iter().map(|t| t.term.clone()).collect();
+                let folds = if crate::normalize::uses_raw_passthrough(language.code()) {
+                    // Same start offset = same source word in two folds:
+                    // one union per offset, one fold per token, so the
+                    // best fold wins instead of summing. Distinct offsets
+                    // (CJK bigrams et al.) and positionless tokens stand
+                    // alone and sum as before.
+                    let mut unions: HashMap<usize, usize> = HashMap::new();
+                    let mut counts: HashMap<usize, usize> = HashMap::new();
+                    let mut next_union = 0usize;
+                    tokens
+                        .iter()
+                        .map(|t| match t.position().map(|(s, _)| s) {
+                            Some(start) => {
+                                let union = *unions.entry(start).or_insert_with(|| {
+                                    let id = next_union;
+                                    next_union += 1;
+                                    id
+                                });
+                                let fold = counts.entry(union).or_insert(0);
+                                let mine = *fold;
+                                *fold += 1;
+                                Some((union, mine))
+                            }
+                            None => None,
+                        })
+                        .collect()
                 } else {
-                    // No pipeline means no second fold: normalize the raw text here
-                    // so programmatic clauses (`HELLO*`) behave like parsed ones,
-                    // and multi-language indexes cover every member's folding
-                    // (`Istanbul` must meet both `istanbul` and `ıstanbul`).
-                    // Width folding and case mapping never touch `*` or `\`.
-                    // One union for the whole bypass: its folds maximize.
-                    let bypass = Self::bypass_terms(&language, &clause.term);
-                    let folds: Vec<Option<(usize, usize)>> = if bypass.len() > 1 {
-                        bypass
-                            .iter()
-                            .enumerate()
-                            .map(|(ti, _)| Some((0, ti)))
-                            .collect()
-                    } else {
-                        vec![None; bypass.len()]
-                    };
-                    (bypass, Vec::new(), folds)
+                    vec![None; tokens.len()]
                 };
+                (terms, phrases, folds)
+            } else {
+                // No pipeline means no second fold: normalize the raw text here
+                // so programmatic clauses (`HELLO*`) behave like parsed ones,
+                // and multi-language indexes cover every member's folding
+                // (`Istanbul` must meet both `istanbul` and `ıstanbul`).
+                // Width folding and case mapping never touch `*` or `\`.
+                // One union for the whole bypass: its folds maximize.
+                let bypass = Self::bypass_terms(&language, &clause.term);
+                let folds: Vec<Option<(usize, usize)>> = if bypass.len() > 1 {
+                    bypass
+                        .iter()
+                        .enumerate()
+                        .map(|(ti, _)| Some((0, ti)))
+                        .collect()
+                } else {
+                    vec![None; bypass.len()]
+                };
+                (bypass, Vec::new(), folds)
+            };
 
             // Collect the expansions for this clause, deduplicated. A wildcard
             // like `**` or an overlapping fuzzy expansion can yield the same
