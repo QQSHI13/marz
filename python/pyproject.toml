@@ -8,7 +8,7 @@ build-backend = "maturin"
 # (`module-name = "marz._marz"` below), so `pip install marz-search` then
 # `import marz`.
 name = "marz-search"
-version = "0.1.2"
+version = "0.1.3"
 description = "Offline search engine with first-class CJK support and no segmentation dictionary."
 # Symlinks to the repository root. Packaging metadata cannot reference paths
 # outside the project directory (`../README.md` is rejected outright), and
