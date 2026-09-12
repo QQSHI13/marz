@@ -65,17 +65,16 @@ impl Default for Clause {
     }
 }
 
-/// Whether `term` starts with an unescaped `*`.
-///
-/// A leading backslash escapes it (`\*foo` is literal text), so a plain
-/// `starts_with` check would mistake an escaped star for a wildcard affix.
+/// Whether `term` starts with an unescaped `*`, counting backslash parity
+/// like [`has_unescaped_wildcard`]: an even run (`\\*`) leaves a real
+/// wildcard, an odd run (`\*`) escapes it.
 fn starts_with_unescaped_wildcard(term: &str) -> bool {
-    let mut chars = term.chars();
-    match (chars.next(), chars.next()) {
-        (Some('*'), _) => true,
-        (Some('\\'), Some('*')) => false,
-        _ => false,
+    let chars: Vec<char> = term.chars().collect();
+    let mut backslashes = 0;
+    while backslashes < chars.len() && chars[backslashes] == '\\' {
+        backslashes += 1;
     }
+    chars.get(backslashes) == Some(&'*') && backslashes % 2 == 0
 }
 
 /// Whether `term` ends with an unescaped `*`, counting backslash parity:
@@ -190,12 +189,8 @@ impl Query {
         if clause.fields.is_empty() {
             clause.fields = self.all_fields.clone();
         }
-        // An empty term matches nothing. Guard before wildcard insertion:
-        // auto-adding `*` would turn it into a match-all.
-        if clause.term.is_empty() {
-            self.clauses.push(clause);
-            return self;
-        }
+        // Boost first, even for empty terms below: validation must not depend
+        // on which early return fires first.
         // A negative boost is meaningless — it would subtract from the score
         // and let a matching document rank below a non-matching one. Clamp it.
         // Non-finite falls back to 1.0 like field and document boosts: an
@@ -212,6 +207,12 @@ impl Query {
         } else {
             1.0
         };
+        // An empty term matches nothing. Guard before wildcard insertion:
+        // auto-adding `*` would turn it into a match-all.
+        if clause.term.is_empty() {
+            self.clauses.push(clause);
+            return self;
+        }
 
         // Apply automatic wildcards, honoring escapes: a term already ending
         // in an unescaped `*` needs nothing appended, but a trailing escaped

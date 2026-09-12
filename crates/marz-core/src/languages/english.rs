@@ -27,7 +27,9 @@ impl Language for English {
     }
 
     fn stem(&self, term: &str) -> String {
-        porter::stem(term)
+        // Lowercase first like every Snowball stemmer: the pipeline always
+        // feeds lowercase, but direct callers must not diverge on case.
+        porter::stem(&term.to_lowercase())
     }
 
     fn separator_chars(&self) -> &str {

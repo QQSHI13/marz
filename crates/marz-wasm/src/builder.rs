@@ -164,14 +164,6 @@ impl MarzBuilder {
                  via field:term syntax"
             )));
         }
-        if name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
-            || matches!(name.chars().next(), Some('+' | '-'))
-        {
-            return Err(error(&format!(
-                "field {name:?} contains a query operator and is unqueryable \
-                 via field:term syntax"
-            )));
-        }
         if self.fields.iter().any(|(existing, _)| existing == name) {
             return Err(error(&format!("field {name:?} is already declared")));
         }

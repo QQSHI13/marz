@@ -80,13 +80,15 @@ pub fn resolve(code: &str) -> Resolved {
 pub fn resolve_multi(code: &str) -> Resolved {
     use crate::language::MultiLanguage;
 
-    let parts: Vec<&str> = code
+    let mut parts: Vec<&str> = code
         .split(',')
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .collect();
-    // A trailing comma is not a second language: resolve the single member,
-    // so `"en,"` behaves exactly like `"en"` instead of falling back.
+    // Deduplicate preserving order: `"en,en"` is one English tokenizer run
+    // twice the work, not two configurations.
+    let mut seen = std::collections::HashSet::new();
+    parts.retain(|part| seen.insert(*part));
     if parts.len() <= 1 {
         return resolve(parts.first().copied().unwrap_or(""));
     }

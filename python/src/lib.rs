@@ -274,14 +274,6 @@ impl IndexBuilder {
                  via field:term syntax"
             )));
         }
-        if name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
-            || matches!(name.chars().next(), Some('+' | '-'))
-        {
-            return Err(PyValueError::new_err(format!(
-                "field {name:?} contains a query operator and is unqueryable \
-                 via field:term syntax"
-            )));
-        }
         if !boost.is_finite() {
             return Err(PyValueError::new_err("boost must be a finite number"));
         }

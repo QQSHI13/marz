@@ -116,6 +116,15 @@ impl<'a> BinaryIndex<'a> {
 
         // Establishing this once is what lets every later accessor slice its own
         // section without re-checking that the section itself is sane.
+        // The first section must start at or after the fixed header: nothing
+        // may overlap the header bytes.
+        if (header.meta_offset as usize) < HEADER_LEN {
+            return Err(FormatError::SectionOutOfBounds {
+                section: "meta",
+                offset: header.meta_offset as usize,
+                end: bytes.len(),
+            });
+        }
         let sections = [
             ("meta", header.meta_offset),
             ("docs", header.docs_offset),

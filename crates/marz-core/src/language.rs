@@ -75,20 +75,20 @@ pub struct MultiLanguage {
 
 impl MultiLanguage {
     /// Tokenize one union-separator-free `piece`, shifting positions by the
-    /// piece's start offset and deduplicating on (term, position).
-    fn tokenize_piece(
+    /// piece's start offset in default-normalized space (see `tokenize`).
+    fn tokenize_piece_at(
         &self,
         seen: &mut std::collections::HashSet<(String, Option<(usize, usize)>)>,
         tokens: &mut Vec<Token>,
         piece: &str,
-        piece_start: usize,
+        norm_offset: usize,
     ) {
         if piece.is_empty() {
             return;
         }
         for lang in &self.languages {
             for mut token in lang.tokenize(piece) {
-                if let Some((start, len)) = token.position().map(|(s, l)| (s + piece_start, l)) {
+                if let Some((start, len)) = token.position().map(|(s, l)| (s + norm_offset, l)) {
                     token.metadata.insert(
                         crate::token::POSITION.to_string(),
                         crate::token::TokenMetadata::Pair(start, len),
@@ -153,31 +153,32 @@ impl Language for MultiLanguage {
         // Deduplicate on (term, position) rather than term alone:
         // collapsing repeated words would destroy both the term frequency and
         // the positions that CJK phrase matching depends on.
+        //
+        // Offsets are counted in default-normalized space: member tokenizers
+        // fold (half-width `ｶﾞ` is 2 chars becoming 1 `ガ`), so raw offsets
+        // would overstate every later piece. Highlighting normalizes the same
+        // way, so the two agree — except Turkish dotted-capital-`İ`, whose
+        // foldings differ in length and are documented on `normalize`.
         let mut seen = std::collections::HashSet::new();
         let mut tokens = Vec::new();
         let mut piece = String::new();
-        let mut piece_start = 0usize; // char offset of the piece in `text`
-        let mut char_idx = 0usize;
+        // Char offset of the piece in default-normalized `text`.
+        let mut norm_offset = 0usize;
         let mut chars = text.chars().peekable();
         loop {
             match chars.peek() {
                 Some(&ch) if self.separators.contains(ch) => {
-                    self.tokenize_piece(&mut seen, &mut tokens, &piece, piece_start);
+                    self.tokenize_piece_at(&mut seen, &mut tokens, &piece, norm_offset);
+                    norm_offset += crate::normalize::normalize(&piece).chars().count() + 1;
                     piece.clear();
                     chars.next();
-                    char_idx += 1;
-                    piece_start = char_idx;
                 }
                 Some(&ch) => {
-                    if piece.is_empty() {
-                        piece_start = char_idx;
-                    }
                     piece.push(ch);
                     chars.next();
-                    char_idx += 1;
                 }
                 None => {
-                    self.tokenize_piece(&mut seen, &mut tokens, &piece, piece_start);
+                    self.tokenize_piece_at(&mut seen, &mut tokens, &piece, norm_offset);
                     break;
                 }
             }

@@ -262,7 +262,8 @@ impl IndexBuilder {
 
     /// Set the document reference field. Defaults to `"id"`.
     pub fn ref_field(&mut self, field: impl Into<String>) -> &mut Self {
-        self.ref_field = field.into();
+        // Trimmed like field names and the bindings: padding is formatting.
+        self.ref_field = field.into().trim().to_string();
         self
     }
 
@@ -288,19 +289,15 @@ impl IndexBuilder {
     /// Non-finite boosts fall back to `1.0`; negative boosts clamp to `0.0`
     /// (they still match, contributing no score).
     pub fn field(&mut self, name: impl Into<String>, boost: f64) -> &mut Self {
+        // Trimmed like the bindings do: `" title "` and `title:q` must meet.
         let name = name.into();
+        let name = name.trim().to_string();
         assert!(!name.is_empty(), "field name must not be empty");
         assert!(
             !name
                 .chars()
                 .any(|c| c.is_whitespace() || self.language.separator_chars().contains(c)),
             "field name {name:?} contains a separator and is unqueryable"
-        );
-        assert!(
-            !name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
-                && !matches!(name.chars().next(), Some('+' | '-')),
-            "field name {name:?} contains a query operator and is unqueryable \
-             via field:term syntax"
         );
         assert!(
             !name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\'))
@@ -513,14 +510,19 @@ struct Contribution<'a> {
     /// property of the term and the corpus, so nothing in the inner loop can
     /// change it.
     idf: f64,
-    /// Bypass fold group both this expansion and its term came from, if the
-    /// clause expanded several folds of one raw term (multi-language union).
-    /// Expansions in one group take the per-document maximum instead of
-    /// summing: the folds express one intent, and summing would double-count
-    /// a document matching both (e.g. `ISTANBUL*` meeting `istanbul` and
-    /// `ıstanbul` postings of one word). `None` sums as before.
-    fold: Option<usize>,
+    /// Fold union this expansion belongs to, if any, as `(union, fold)`.
+    ///
+    /// Folds of one intent (bypass fold union, or pipeline tokens sharing a
+    /// source-word start offset) sum within each fold and take the maximum
+    /// across folds, per document-field — instead of summing everything, which
+    /// would double-count a document matching both (e.g. `ISTANBUL*` meeting
+    /// `istanbul` and `ıstanbul` postings of one word). `None` sums as before.
+    fold: Option<(usize, usize)>,
 }
+
+/// A clause's terms with their fold identities: `(union, fold)` per term,
+/// or `None` for ungrouped terms that sum directly. See `Contribution::fold`.
+type ClauseTerms = (Vec<String>, Vec<Phrase>, Vec<Option<(usize, usize)>>);
 
 impl Index {
     /// Search the index using lunr query syntax.
@@ -705,41 +707,78 @@ impl Index {
             // Phrases are derived from the pipeline's tokens, so they are only
             // available when the pipeline ran. A wildcard clause disables it,
             // and a wildcard is an explicit request for loose matching anyway.
-            // Bypass folds of one raw term share a fold group (see
-            // `Contribution::fold`); pipeline terms each stand alone.
-            let (terms, phrases, fold_union) = if clause.use_pipeline {
-                let tokens = self.pipeline.run_search(&clause.term);
-                let phrases = extract_phrases(&tokens, &language);
-                let terms: Vec<String> = tokens.into_iter().map(|t| t.term).collect();
-                (terms, phrases, false)
-            } else {
-                // No pipeline means no second fold: normalize the raw text here
-                // so programmatic clauses (`HELLO*`) behave like parsed ones,
-                // and multi-language indexes cover every member's folding
-                // (`Istanbul` must meet both `istanbul` and `ıstanbul`).
-                // Width folding and case mapping never touch `*` or `\`.
-                let folds = Self::bypass_terms(&language, &clause.term);
-                let union = folds.len() > 1;
-                (folds, Vec::new(), union)
-            };
+            // Each term carries an optional (union, fold) identity (see
+            // `Contribution::fold`): `None` sums exactly as before; unions of
+            // one intent maximize across folds per document-field.
+            let (terms, phrases, folds): ClauseTerms =
+                if clause.use_pipeline {
+                    let tokens = self.pipeline.run_search(&clause.term);
+                    let phrases = extract_phrases(&tokens, &language);
+                    let terms: Vec<String> = tokens.iter().map(|t| t.term.clone()).collect();
+                    let folds = if crate::normalize::uses_raw_passthrough(language.code()) {
+                        // Same start offset = same source word in two folds:
+                        // one union per offset, one fold per token, so the
+                        // best fold wins instead of summing. Distinct offsets
+                        // (CJK bigrams et al.) and positionless tokens stand
+                        // alone and sum as before.
+                        let mut unions: HashMap<usize, usize> = HashMap::new();
+                        let mut counts: HashMap<usize, usize> = HashMap::new();
+                        let mut next_union = 0usize;
+                        tokens
+                            .iter()
+                            .map(|t| match t.position().map(|(s, _)| s) {
+                                Some(start) => {
+                                    let union = *unions.entry(start).or_insert_with(|| {
+                                        let id = next_union;
+                                        next_union += 1;
+                                        id
+                                    });
+                                    let fold = counts.entry(union).or_insert(0);
+                                    let mine = *fold;
+                                    *fold += 1;
+                                    Some((union, mine))
+                                }
+                                None => None,
+                            })
+                            .collect()
+                    } else {
+                        vec![None; tokens.len()]
+                    };
+                    (terms, phrases, folds)
+                } else {
+                    // No pipeline means no second fold: normalize the raw text here
+                    // so programmatic clauses (`HELLO*`) behave like parsed ones,
+                    // and multi-language indexes cover every member's folding
+                    // (`Istanbul` must meet both `istanbul` and `ıstanbul`).
+                    // Width folding and case mapping never touch `*` or `\`.
+                    // One union for the whole bypass: its folds maximize.
+                    let bypass = Self::bypass_terms(&language, &clause.term);
+                    let folds: Vec<Option<(usize, usize)>> = if bypass.len() > 1 {
+                        bypass
+                            .iter()
+                            .enumerate()
+                            .map(|(ti, _)| Some((0, ti)))
+                            .collect()
+                    } else {
+                        vec![None; bypass.len()]
+                    };
+                    (bypass, Vec::new(), folds)
+                };
 
             // Collect the expansions for this clause, deduplicated. A wildcard
             // like `**` or an overlapping fuzzy expansion can yield the same
             // indexed term repeatedly; scoring it more than once would inflate
-            // the document's score by the number of duplicates. Deduplication
-            // resets per fold so each fold of a union scores whole.
+            // the document's score by the number of duplicates.
             let mut seen: HashSet<String> = HashSet::new();
             let mut contributions: Vec<Contribution<'_>> = Vec::new();
-            // Per-(document, field, fold) sums for union folds, maximized
-            // below. Empty unless the clause bypassed with several folds.
-            let mut fold_scores: HashMap<(&str, &str, usize), f64> = HashMap::new();
+            // Per-(document, field, union, fold) sums, maximized per union
+            // below. Terms outside any union behave exactly as ungrouped sums.
+            let mut fold_scores: HashMap<(&str, &str, usize, usize), f64> = HashMap::new();
             for (ti, term) in terms.iter().enumerate() {
                 if term.is_empty() {
                     continue;
                 }
-                if fold_union {
-                    seen.clear();
-                }
+                let fold = folds[ti];
                 for expanded in self.expand_clause_term(&clause.term, term, clause.edit_distance) {
                     if !seen.insert(expanded.clone()) {
                         continue;
@@ -750,7 +789,7 @@ impl Index {
                             posting,
                             boost: clause.boost,
                             idf: idf(self.stats.document_count, posting.document_frequency()),
-                            fold: fold_union.then_some(ti),
+                            fold,
                         });
                     }
                 }
@@ -811,9 +850,9 @@ impl Index {
                         match contribution.fold {
                             // One intent, several folds: keep the best fold's
                             // sum per document-field, merged below.
-                            Some(fold) => {
+                            Some((union, fold)) => {
                                 let entry = fold_scores
-                                    .entry((doc_ref.as_str(), field_name.as_str(), fold))
+                                    .entry((doc_ref.as_str(), field_name.as_str(), union, fold))
                                     .or_insert(0.0);
                                 *entry += score;
                             }
@@ -830,15 +869,17 @@ impl Index {
                 }
             }
             // Fold groups harmonize here: each document keeps the maximum
-            // across a union's folds, then joins the running total like any
-            // other clause contribution.
+            // across one union's folds, and every union joins the running
+            // total like any other clause contribution. Keyed by union so
+            // distinct intents (CJK bigrams at different offsets, separate
+            // bypass terms) still sum.
             {
-                let mut maxima: HashMap<(&str, &str), f64> = HashMap::new();
-                for ((doc_ref, field_name, _), sum) in fold_scores {
-                    let entry = maxima.entry((doc_ref, field_name)).or_insert(0.0);
+                let mut maxima: HashMap<(&str, &str, usize), f64> = HashMap::new();
+                for ((doc_ref, field_name, union, _), sum) in fold_scores {
+                    let entry = maxima.entry((doc_ref, field_name, union)).or_insert(0.0);
                     *entry = entry.max(sum);
                 }
-                for ((doc_ref, _), best) in maxima {
+                for ((doc_ref, _, _), best) in maxima {
                     *scores.entry(doc_ref).or_insert(0.0) += best;
                 }
             }
@@ -1535,6 +1576,30 @@ mod tests {
         assert!(
             (upper - lower).abs() < 1e-9,
             "fold union must not double-count: {upper} vs {lower}"
+        );
+    }
+
+    #[test]
+    fn pipeline_folds_max_while_terms_sum() {
+        // Parsed non-wildcard queries in passthrough mode: two folds of one
+        // word take the maximum, while two different words still sum.
+        use crate::languages::registry;
+        let multi = registry::resolve_multi("en,tr").language;
+        let mut builder = IndexBuilder::new(multi);
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("d", 1.0, |_| Some("Istanbul Ankara".to_string()));
+        let index = builder.build();
+        let both = index.search("ISTANBUL ANKARA").unwrap()[0].score;
+        let one = index.search("ISTANBUL").unwrap()[0].score;
+        assert!(
+            both > one,
+            "distinct query words must still sum: {both} vs {one}"
+        );
+        let upper = index.search("ISTANBUL").unwrap()[0].score;
+        let lower = index.search("istanbul").unwrap()[0].score;
+        assert!(
+            (upper - lower).abs() < 1e-9,
+            "same intent must score equally: {upper} vs {lower}"
         );
     }
 }

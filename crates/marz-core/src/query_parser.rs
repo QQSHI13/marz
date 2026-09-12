@@ -233,6 +233,23 @@ impl<'a> QueryLexer<'a> {
         }
     }
 
+    /// Consume trailing word characters into the current lexeme.
+    ///
+    /// `hello^12xyz` is a malformed boost, not a boost plus a phantom `xyz`
+    /// clause that outranks real matches: folding the tail in makes
+    /// `parse::<f64>` fail loudly. Stops at anything the main lexer treats
+    /// structurally (`+ - : ~ ^` separators and whitespace keep their
+    /// meaning), so `hello^12-34` still parses as boost plus prohibition.
+    fn accept_word_tail(&mut self) {
+        while let Some(ch) = self.next() {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+                continue;
+            }
+            self.backup();
+            break;
+        }
+    }
+
     fn more(&self) -> bool {
         self.pos < self.chars.len()
     }
@@ -307,6 +324,7 @@ impl<'a> QueryLexer<'a> {
     fn lex_edit_distance(&mut self) -> Option<LexState> {
         self.ignore();
         self.accept_digit_run();
+        self.accept_word_tail();
         self.emit(LexemeType::EditDistance);
         Some(LexState::Text)
     }
@@ -314,6 +332,7 @@ impl<'a> QueryLexer<'a> {
     fn lex_boost(&mut self) -> Option<LexState> {
         self.ignore();
         self.accept_number_run();
+        self.accept_word_tail();
         self.emit(LexemeType::Boost);
         Some(LexState::Text)
     }
