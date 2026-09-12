@@ -46,8 +46,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
       - name: Regenerate from lunr.js
         working-directory: tests
         run: |
@@ -116,8 +114,6 @@ jobs:
       # Node's built-in test runner strips the TypeScript at runtime, so the JS
       # suite needs no npm install. 22.x is the oldest release that does it.
       - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
       - name: Install wasm-pack
         run: |
           if ! command -v wasm-pack &> /dev/null; then

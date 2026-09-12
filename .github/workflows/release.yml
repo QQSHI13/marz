@@ -81,8 +81,6 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
       - uses: astral-sh/setup-uv@v7
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -245,7 +243,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
           registry-url: "https://registry.npmjs.org"
       # Trusted publishing needs a newer npm than any Node release bundles.
       - name: Install a trusted-publishing-capable npm
