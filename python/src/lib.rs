@@ -331,11 +331,17 @@ impl IndexBuilder {
                 fields.insert(name.clone(), text);
             }
         }
-        self.docs.push(StagedDoc {
+        let staged = StagedDoc {
             doc_ref,
             boost,
             fields,
-        });
+        };
+        // Upsert: same reference replaces, matching core `IndexBuilder::add`.
+        if let Some(existing) = self.docs.iter_mut().find(|d| d.doc_ref == staged.doc_ref) {
+            *existing = staged;
+        } else {
+            self.docs.push(staged);
+        }
         Ok(())
     }
 

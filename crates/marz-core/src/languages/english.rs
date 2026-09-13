@@ -1,9 +1,9 @@
 //! English language implementation.
 
 use crate::language::Language;
+use crate::languages::cjk::tokenize_with_script_split;
 use crate::languages::porter;
 use crate::token::Token;
-use crate::tokenizer::{is_word_char, tokenize_with_separator};
 
 /// English language configuration.
 #[derive(Debug, Clone, Default)]
@@ -15,15 +15,17 @@ impl Language for English {
     }
 
     fn tokenize(&self, text: &str) -> Vec<Token> {
-        tokenize_with_separator(text, " \t\n\r\x0C\x0B\x0D\u{00A0}-")
+        // Split on script boundaries first so `hello検索` yields `hello` plus
+        // `検索` rather than one ghost term no query reaches.
+        tokenize_with_script_split(text, " \t\n\r\x0C\x0B\x0D\u{00A0}-")
     }
 
     fn trim(&self, token: &mut Token) -> bool {
-        token.trim_matching(is_word_char)
+        token.trim_matching(crate::tokenizer::is_word_char)
     }
 
     fn is_stop_word(&self, term: &str) -> bool {
-        STOP_WORDS.binary_search(&term).is_ok()
+        STOP_WORDS.binary_search(&term.to_lowercase().as_str()).is_ok()
     }
 
     fn stem(&self, term: &str) -> String {

@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use marz_core::IndexBuilder as CoreBuilder;
 use wasm_bindgen::prelude::*;
 
-use crate::{error, language_for};
+use crate::{error, language_for, language_for_load};
 
 /// A document staged for indexing, already copied out of JavaScript.
 struct StagedDoc {
@@ -221,11 +221,17 @@ impl MarzBuilder {
                 fields.insert(name.clone(), text);
             }
         }
-        self.docs.push(StagedDoc {
+        let staged = StagedDoc {
             doc_ref,
             boost,
             fields,
-        });
+        };
+        // Upsert: same reference replaces, matching core `IndexBuilder::add`.
+        if let Some(existing) = self.docs.iter_mut().find(|d| d.doc_ref == staged.doc_ref) {
+            *existing = staged;
+        } else {
+            self.docs.push(staged);
+        }
         Ok(())
     }
 
@@ -263,7 +269,9 @@ impl MarzBuilder {
 
     /// Shared core-builder construction (fields + docs + BM25 params).
     fn core_builder(&self) -> CoreBuilder {
-        let language = language_for(&self.language_code);
+        // Silent resolve: `new` already warned for an unknown code; warning
+        // again on every `build`/`buildAndLoad` would double-report one typo.
+        let language = language_for_load(&self.language_code);
         let mut builder = CoreBuilder::new(language);
         builder
             .ref_field(self.ref_field.clone())

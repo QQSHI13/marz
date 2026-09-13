@@ -180,7 +180,7 @@ impl Query {
     pub fn new(all_fields: Vec<String>) -> Self {
         Self {
             clauses: Vec::new(),
-            all_fields,
+            all_fields: dedup_fields(all_fields),
         }
     }
 
@@ -188,6 +188,8 @@ impl Query {
     pub fn clause(&mut self, mut clause: Clause) -> &mut Self {
         if clause.fields.is_empty() {
             clause.fields = self.all_fields.clone();
+        } else {
+            clause.fields = dedup_fields(std::mem::take(&mut clause.fields));
         }
         // Boost first, even for empty terms below: validation must not depend
         // on which early return fires first.
@@ -263,6 +265,21 @@ impl Query {
                 .iter()
                 .all(|c| c.presence == Presence::Prohibited)
     }
+}
+
+/// Deduplicate field names preserving first-seen order.
+///
+/// Duplicate entries would double-count postings in `execute_query`, which
+/// iterates `clause.fields` verbatim for both doc collection and scoring.
+fn dedup_fields(fields: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::with_capacity(fields.len());
+    let mut out = Vec::with_capacity(fields.len());
+    for f in fields {
+        if seen.insert(f.clone()) {
+            out.push(f);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

@@ -20,8 +20,34 @@
 
 use super::varint::Cursor;
 use super::{
-    read_f64, read_u32, FormatError, Header, FORMAT_VERSION, HEADER_LEN, MAGIC, TERMS_PER_BLOCK,
+    read_f64, read_u32, FormatError, Header, FLAG_HAS_POSITIONS, FORMAT_VERSION, HEADER_LEN, MAGIC,
+    TERMS_PER_BLOCK,
 };
+
+/// Validate a field name read from the meta section.
+///
+/// Mirrors the language-independent half of `IndexBuilder::field`: empty,
+/// `/`, whitespace, query operators and leading `+`/`-` are rejected at build
+/// time, so their presence on load means corruption. (Separator checks need
+/// the resolved language and stay in the builder.)
+fn validate_field_name(name: &str) -> Result<(), ()> {
+    if name.is_empty() || name != name.trim() {
+        return Err(());
+    }
+    if name.contains('/') {
+        return Err(());
+    }
+    if name.chars().any(|c| c.is_whitespace()) {
+        return Err(());
+    }
+    if name.chars().any(|c| matches!(c, ':' | '^' | '~' | '\\')) {
+        return Err(());
+    }
+    if matches!(name.chars().next(), Some('+' | '-')) {
+        return Err(());
+    }
+    Ok(())
+}
 
 /// One document's entry in a term's posting list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +140,12 @@ impl<'a> BinaryIndex<'a> {
             end_offset: read_u32(bytes, 60, "header")?,
         };
 
+        // Reject unknown flag bits: a future layout-changing flag silently
+        // misread as v1 would produce wrong results rather than an error.
+        if header.flags & !FLAG_HAS_POSITIONS != 0 {
+            return Err(FormatError::InvalidFlags { flags: header.flags });
+        }
+
         // Establishing this once is what lets every later accessor slice its own
         // section without re-checking that the section itself is sane.
         // The first section must start at or after the fixed header: nothing
@@ -138,6 +170,26 @@ impl<'a> BinaryIndex<'a> {
                 section: "end",
                 offset: header.end_offset as usize,
                 end: bytes.len(),
+            });
+        }
+        // No trailing bytes: `end_offset` is the logical file length, so
+        // anything past it is corruption (or a concatenated file) that must
+        // not be silently ignored.
+        if (header.end_offset as usize) != bytes.len() {
+            return Err(FormatError::SectionOutOfBounds {
+                section: "end",
+                offset: header.end_offset as usize,
+                end: bytes.len(),
+            });
+        }
+        // Flag/section consistency: an index built without positions must
+        // have an empty positions section. Otherwise a flipped flag bit is
+        // silently accepted and phrase verification just stops working.
+        if header.flags & FLAG_HAS_POSITIONS == 0
+            && header.positions_offset != header.end_offset
+        {
+            return Err(FormatError::Truncated {
+                section: "positions",
             });
         }
         for window in sections.windows(2) {
@@ -174,8 +226,10 @@ impl<'a> BinaryIndex<'a> {
         let meta = self.section(self.header.meta_offset, self.header.docs_offset, "meta")?;
         let mut cursor = Cursor::new(meta, "meta");
         self.language = cursor.read_str()?.to_string();
-        for _ in 0..self.header.field_count {
-            self.fields.push(cursor.read_str()?.to_string());
+        for i in 0..self.header.field_count {
+            let name = cursor.read_str()?.to_string();
+            validate_field_name(&name).map_err(|_| FormatError::InvalidFieldId(i))?;
+            self.fields.push(name);
         }
         let boosts_start = cursor.position();
         for i in 0..self.header.field_count as usize {
@@ -232,6 +286,23 @@ impl<'a> BinaryIndex<'a> {
         let terms_len = (self.header.postings_offset - self.header.terms_offset) as usize;
         if self.dictionary_base > terms_len {
             return Err(FormatError::Truncated { section: "terms" });
+        }
+
+        // The doc offset table must be non-decreasing with its terminator
+        // equal to the heap length: otherwise overlapping refs are silently
+        // accepted (e.g. `[0,1,2]` corrupted to `[0,0,2]`).
+        let docs = self.section(self.header.docs_offset, self.header.terms_offset, "docs")?;
+        let heap_len = docs_len - self.doc_heap_base;
+        let mut prev = 0usize;
+        for i in 0..=doc_count {
+            let off = read_u32(docs, i * 4, "docs")? as usize;
+            if off < prev || off > heap_len {
+                return Err(FormatError::Truncated { section: "docs" });
+            }
+            prev = off;
+        }
+        if prev != heap_len {
+            return Err(FormatError::Truncated { section: "docs" });
         }
         Ok(())
     }
@@ -348,8 +419,17 @@ impl<'a> BinaryIndex<'a> {
         if end < start {
             return Err(FormatError::Truncated { section: "docs" });
         }
-        let heap_start = self.doc_heap_base + start;
-        let heap_end = self.doc_heap_base + end;
+        // `checked_add`: `start`/`end` are untrusted u32s from the file.
+        // On 64-bit the wrapping case still fails at `.get()` below, but on
+        // 32-bit plain `+` wraps to an in-bounds index and accepts corruption.
+        let heap_start = self
+            .doc_heap_base
+            .checked_add(start)
+            .ok_or(FormatError::Truncated { section: "docs" })?;
+        let heap_end = self
+            .doc_heap_base
+            .checked_add(end)
+            .ok_or(FormatError::Truncated { section: "docs" })?;
         let slice = docs
             .get(heap_start..heap_end)
             .ok_or(FormatError::Truncated { section: "docs" })?;
@@ -457,8 +537,17 @@ impl<'a> BinaryIndex<'a> {
         if end < start {
             return Err(FormatError::Truncated { section: "terms" });
         }
+        // `checked_add`: untrusted u32s; plain `+` wraps on 32-bit targets.
+        let dict_start = self
+            .dictionary_base
+            .checked_add(start)
+            .ok_or(FormatError::Truncated { section: "terms" })?;
+        let dict_end = self
+            .dictionary_base
+            .checked_add(end)
+            .ok_or(FormatError::Truncated { section: "terms" })?;
         let slice = terms
-            .get(self.dictionary_base + start..self.dictionary_base + end)
+            .get(dict_start..dict_end)
             .ok_or(FormatError::Truncated { section: "terms" })?;
         Ok(Cursor::new(slice, "terms"))
     }
@@ -1103,6 +1192,17 @@ mod tests {
             let mut corrupt = bytes.clone();
             let wide = encode_varint(u64::from(u32::MAX));
             corrupt.splice(offset..offset + 1, wide);
+            // Keep the header's logical length in sync with the splice so
+            // `open` exercises the postings decoder rather than the
+            // trailing-byte check.
+            let new_end = corrupt.len() as u32;
+            corrupt[60..64].copy_from_slice(&new_end.to_le_bytes());
+            // Sections after postings shift by the splice delta; patch them
+            // so only the postings payload stays corrupt.
+            let delta = new_end.wrapping_sub(bytes.len() as u32);
+            let off = 56usize;
+            let v = u32::from_le_bytes(corrupt[off..off + 4].try_into().unwrap());
+            corrupt[off..off + 4].copy_from_slice(&v.wrapping_add(delta).to_le_bytes());
             let index = BinaryIndex::open(&corrupt).unwrap();
             assert!(
                 index.postings(0).is_err(),

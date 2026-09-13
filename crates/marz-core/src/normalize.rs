@@ -58,6 +58,32 @@ pub fn normalize(text: &str) -> String {
             continue;
         }
 
+        // Combining voicing marks (NFKC/NFC): full-width Hiragana/Katakana
+        // base + U+3099/U+309A composes where a precomposed form exists
+        // (か + ゙ -> が, ハ + ゚ -> パ). Without this, decomposed and composed
+        // forms index as different terms.
+        if matches!(c, '\u{3099}' | '\u{309A}') {
+            // Lone mark with no base: pass through (trimmed later).
+            out.extend(fold_char(c));
+            i += 1;
+            continue;
+        }
+        if let Some(next) = chars.get(i + 1).copied() {
+            if next == '\u{3099}' {
+                if let Some(voiced) = compose_voicing(c, false) {
+                    out.push(voiced);
+                    i += 2;
+                    continue;
+                }
+            } else if next == '\u{309A}' {
+                if let Some(semi) = compose_voicing(c, true) {
+                    out.push(semi);
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+
         out.extend(fold_char(c));
         i += 1;
     }
@@ -153,6 +179,26 @@ fn normalize_fold_only(text: &str) -> String {
             i += 1;
             continue;
         }
+        if matches!(c, '\u{3099}' | '\u{309A}') {
+            out.extend(fold_char(c));
+            i += 1;
+            continue;
+        }
+        if let Some(next) = chars.get(i + 1).copied() {
+            if next == '\u{3099}' {
+                if let Some(voiced) = compose_voicing(c, false) {
+                    out.push(voiced);
+                    i += 2;
+                    continue;
+                }
+            } else if next == '\u{309A}' {
+                if let Some(semi) = compose_voicing(c, true) {
+                    out.push(semi);
+                    i += 2;
+                    continue;
+                }
+            }
+        }
         out.extend(fold_char(c));
         i += 1;
     }
@@ -166,11 +212,81 @@ fn fold_char(c: char) -> impl Iterator<Item = char> {
         0xFF01..=0xFF5E => char::from_u32(c as u32 - 0xFF01 + 0x21).unwrap_or(c),
         // Ideographic space and assorted Unicode spaces -> plain space.
         0x3000 | 0x2000..=0x200A | 0x202F | 0x205F => ' ',
-        // Full-width / wave / fullwidth macron oddities that appear in the wild.
+        // Full-width currency/sign oddities (NFKC compatibility folds).
+        0xFFE0 => '\u{00A2}', // ¢
+        0xFFE1 => '\u{00A3}', // £
+        0xFFE2 => '\u{00AC}', // ¬
+        0xFFE3 => '\u{00AF}', // ¯ (NFKC is space + combining macron; fold to macron)
+        0xFFE4 => '\u{00A6}', // ¦
         0xFFE5 => '¥',
+        0xFFE6 => '\u{20A9}', // ₩
+        // Half-width Hangul (compatibility Jamo) -> standard Jamo (NFKC).
+        0xFFA0..=0xFFDC => halfwidth_hangul(c).unwrap_or(c),
         _ => c,
     };
     std::iter::once(folded)
+}
+
+/// Map half-width Hangul compatibility Jamo to standard Jamo (NFKC).
+///
+/// `None` for the slots with no NFKC mapping (FFBF, FFC0, FFC1, FFC8, FFC9,
+/// FFD0, FFD1, FFD8, FFD9), which pass through unchanged.
+fn halfwidth_hangul(c: char) -> Option<char> {
+    Some(match c as u32 {
+        0xFFA0 => '\u{1160}',
+        0xFFA1 => '\u{1100}',
+        0xFFA2 => '\u{1101}',
+        0xFFA3 => '\u{11AA}',
+        0xFFA4 => '\u{1102}',
+        0xFFA5 => '\u{11AC}',
+        0xFFA6 => '\u{11AD}',
+        0xFFA7 => '\u{1103}',
+        0xFFA8 => '\u{1104}',
+        0xFFA9 => '\u{1105}',
+        0xFFAA => '\u{11B0}',
+        0xFFAB => '\u{11B1}',
+        0xFFAC => '\u{11B2}',
+        0xFFAD => '\u{11B3}',
+        0xFFAE => '\u{11B4}',
+        0xFFAF => '\u{11B5}',
+        0xFFB0 => '\u{111A}',
+        0xFFB1 => '\u{1106}',
+        0xFFB2 => '\u{1107}',
+        0xFFB3 => '\u{1108}',
+        0xFFB4 => '\u{1121}',
+        0xFFB5 => '\u{1109}',
+        0xFFB6 => '\u{110A}',
+        0xFFB7 => '\u{110B}',
+        0xFFB8 => '\u{110C}',
+        0xFFB9 => '\u{110D}',
+        0xFFBA => '\u{110E}',
+        0xFFBB => '\u{110F}',
+        0xFFBC => '\u{1110}',
+        0xFFBD => '\u{1111}',
+        0xFFBE => '\u{1112}',
+        0xFFC2 => '\u{1161}',
+        0xFFC3 => '\u{1162}',
+        0xFFC4 => '\u{1163}',
+        0xFFC5 => '\u{1164}',
+        0xFFC6 => '\u{1165}',
+        0xFFC7 => '\u{1166}',
+        0xFFCA => '\u{1167}',
+        0xFFCB => '\u{1168}',
+        0xFFCC => '\u{1169}',
+        0xFFCD => '\u{116A}',
+        0xFFCE => '\u{116B}',
+        0xFFCF => '\u{116C}',
+        0xFFD2 => '\u{116D}',
+        0xFFD3 => '\u{116E}',
+        0xFFD4 => '\u{116F}',
+        0xFFD5 => '\u{1170}',
+        0xFFD6 => '\u{1171}',
+        0xFFD7 => '\u{1172}',
+        0xFFDA => '\u{1173}',
+        0xFFDB => '\u{1174}',
+        0xFFDC => '\u{1175}',
+        _ => return None,
+    })
 }
 
 /// Map a half-width katakana code point to its full-width base form.
@@ -291,6 +407,43 @@ fn compose_semi_voiced(base: char) -> Option<char> {
         return char::from_u32(base as u32 + 2);
     }
     None
+}
+
+/// Compose a full-width Hiragana/Katakana base with a combining voicing mark
+/// (U+3099 voiced, U+309A semi-voiced), e.g. か + ゙ -> が.
+///
+/// Mirrors [`compose_voiced`]/[`compose_semi_voiced`] for the full-width
+/// blocks: the voiced form is the base code point plus one for the twenty
+/// kana in each row, with `う -> ゔ` / `ウ -> ヴ` as specials (and
+/// `ワ -> ヷ`, `ヲ -> ヺ` on the katakana side only — hiragana `わ`/`を` have
+/// no precomposed voiced form). Semi-voiced is base plus two for `は` row.
+fn compose_voicing(base: char, semi: bool) -> Option<char> {
+    if semi {
+        if matches!(
+            base,
+            'は' | 'ひ' | 'ふ' | 'へ' | 'ほ' | 'ハ' | 'ヒ' | 'フ' | 'ヘ' | 'ホ'
+        ) {
+            return char::from_u32(base as u32 + 2);
+        }
+        return None;
+    }
+    if matches!(
+        base,
+        'か' | 'き' | 'く' | 'け' | 'こ' | 'さ' | 'し' | 'す' | 'せ' | 'そ' | 'た'
+            | 'ち' | 'つ' | 'て' | 'と' | 'は' | 'ひ' | 'ふ' | 'へ' | 'ほ'
+            | 'カ' | 'キ' | 'ク' | 'ケ' | 'コ' | 'サ' | 'シ' | 'ス' | 'セ'
+            | 'ソ' | 'タ' | 'チ' | 'ツ' | 'テ' | 'ト' | 'ハ' | 'ヒ' | 'フ'
+            | 'ヘ' | 'ホ'
+    ) {
+        return char::from_u32(base as u32 + 1);
+    }
+    match base {
+        'う' => Some('\u{3094}'), // ゔ
+        'ウ' => Some('\u{30F4}'), // ヴ
+        'ワ' => Some('\u{30F7}'), // ヷ
+        'ヲ' => Some('\u{30FA}'), // ヺ
+        _ => None,
+    }
 }
 
 #[cfg(test)]

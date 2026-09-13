@@ -88,6 +88,13 @@ impl MultiLanguage {
         }
         for lang in &self.languages {
             for mut token in lang.tokenize(piece) {
+                // Drop ghost mixed-script terms: e.g. the English side of an
+                // `en,ja` index emits `hello検索` whole for a piece the
+                // Japanese side splits into `hello` + `検索`. The ghost is
+                // unreachable by any query and inflates field lengths/BM25.
+                if crate::languages::cjk::is_mixed_script(&token.term) {
+                    continue;
+                }
                 if let Some((start, len)) = token.position().map(|(s, l)| (s + norm_offset, l)) {
                     token.metadata.insert(
                         crate::token::POSITION.to_string(),

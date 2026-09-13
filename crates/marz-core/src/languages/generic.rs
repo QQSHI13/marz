@@ -22,8 +22,9 @@
 //! itself as something no caller ever asked for.
 
 use crate::language::Language;
+use crate::languages::cjk::tokenize_with_script_split;
 use crate::token::Token;
-use crate::tokenizer::{is_word_char, tokenize_with_separator};
+use crate::tokenizer::is_word_char;
 
 /// Separators for a language written with spaces.
 ///
@@ -55,9 +56,13 @@ impl Language for Generic {
         // same way, or trimmed builds disagree with themselves.
         if self.code == "tr" {
             let normalized = crate::normalize::normalize_tr(text);
-            return crate::tokenizer::tokenize_normalized(&normalized, GENERIC_SEPARATORS);
+            return crate::languages::cjk::tokenize_normalized_with_script_split(
+                &normalized,
+                GENERIC_SEPARATORS,
+            );
         }
-        tokenize_with_separator(text, GENERIC_SEPARATORS)
+        // Split on script boundaries so glued CJK does not form ghost terms.
+        tokenize_with_script_split(text, GENERIC_SEPARATORS)
     }
 
     fn trim(&self, token: &mut Token) -> bool {

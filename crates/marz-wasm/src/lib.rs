@@ -104,7 +104,7 @@ fn language_for(code: &str) -> Arc<dyn Language> {
 /// Warning on every page load for a working index would train callers to ignore
 /// the warning that catches real typos at build time. Stored multi-language
 /// codes (`en,ja`) resolve back to the same combination.
-fn language_for_load(code: &str) -> Arc<dyn Language> {
+pub(crate) fn language_for_load(code: &str) -> Arc<dyn Language> {
     registry::resolve_multi(code).language
 }
 

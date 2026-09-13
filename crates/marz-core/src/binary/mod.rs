@@ -263,6 +263,11 @@ pub enum FormatError {
     /// The file declares positions but the postings reference none, or the
     /// reverse.
     PositionsUnavailable,
+    /// The header carries flag bits this build does not understand.
+    InvalidFlags {
+        /// Raw flag bits found in the file.
+        flags: u16,
+    },
 }
 
 impl std::fmt::Display for FormatError {
@@ -313,6 +318,9 @@ impl std::fmt::Display for FormatError {
             ),
             Self::PositionsUnavailable => {
                 write!(f, "this index was built without positions")
+            }
+            Self::InvalidFlags { flags } => {
+                write!(f, "index has unsupported flag bits {flags:#06x}")
             }
         }
     }

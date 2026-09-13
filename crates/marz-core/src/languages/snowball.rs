@@ -31,9 +31,10 @@
 //! requires it.
 
 use crate::language::Language;
+use crate::languages::cjk::{tokenize_normalized_with_script_split, tokenize_with_script_split};
 use crate::stemmers::snowball::SnowballEnv;
 use crate::token::Token;
-use crate::tokenizer::{is_word_char, tokenize_with_separator};
+use crate::tokenizer::is_word_char;
 
 /// Separators for languages written with spaces and Latin-style punctuation.
 ///
@@ -79,12 +80,13 @@ impl Language for SnowballLanguage {
     fn tokenize(&self, text: &str) -> Vec<Token> {
         // Turkish needs dotless-I lowercasing; the global `normalize` would
         // merge `I`/`ı`. Fold with Turkish rules first, then split without a
-        // second (wrong) normalize pass.
+        // second (wrong) normalize pass — still splitting on script boundaries
+        // so glued CJK does not form ghost terms.
         if self.code == "tr" {
             let normalized = crate::normalize::normalize_tr(text);
-            return crate::tokenizer::tokenize_normalized(&normalized, self.separators);
+            return tokenize_normalized_with_script_split(&normalized, self.separators);
         }
-        tokenize_with_separator(text, self.separators)
+        tokenize_with_script_split(text, self.separators)
     }
 
     fn trim(&self, token: &mut Token) -> bool {

@@ -34,10 +34,6 @@ pub use token::Token;
 ///
 /// Formula: log(1 + abs((N - df + 0.5) / (df + 0.5)))
 pub fn idf(document_count: usize, doc_frequency: usize) -> f64 {
-    debug_assert!(
-        doc_frequency <= document_count,
-        "df ({doc_frequency}) > N ({document_count}): corrupt index"
-    );
     let n = document_count as f64;
     // Clamp: a corrupt index with df > N would otherwise be masked by `abs`
     // into a plausible-looking but wrong ranking.

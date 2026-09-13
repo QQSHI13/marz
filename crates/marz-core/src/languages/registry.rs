@@ -159,10 +159,15 @@ const HAND_WRITTEN: &[&str] = &["en", "zh", "ja", "ko"];
 /// stemming). Used to compare a requested code against a stored one without
 /// tripping on formatting.
 pub fn canonical_parts(code: &str) -> Vec<String> {
-    code.split(',')
+    let mut out: Vec<String> = code
+        .split(',')
         .map(|part| part.trim().to_string())
         .filter(|part| !part.is_empty())
-        .collect()
+        .collect();
+    // Match `resolve_multi`: `"en,en"` is one configuration, not two.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|part| seen.insert(part.clone()));
+    out
 }
 
 /// Whether `code` names a language Marz implements.

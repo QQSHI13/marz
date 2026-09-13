@@ -130,6 +130,10 @@ pub fn is_tibetan(c: char) -> bool {
 pub fn is_combining_mark(c: char) -> bool {
     matches!(
         c as u32,
+        // Kana voicing marks: combining dakuten/handakuten. Composed away by
+        // `normalize` where a precomposed form exists; any remainder attaches
+        // to the preceding kana rather than starting its own cluster.
+        0x3099..=0x309A |
         // Thai
         0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E
         // Lao
@@ -145,6 +149,23 @@ pub fn is_combining_mark(c: char) -> bool {
         | 0x0F71..=0x0F84 | 0x0F86..=0x0F87 | 0x0F8D..=0x0F97
         | 0x0F99..=0x0FBC | 0x0FC6
     )
+}
+
+/// Returns true for the katakana-hiragana prolonged sound mark `ー` (U+30FC).
+///
+/// `ー` lengthens the previous mora (`ラーメン`, `らーめん`) rather than
+/// starting a new morpheme, so run segmentation must not split on it: it
+/// inherits the previous script's run instead of forcing Katakana.
+pub fn is_prolonged_mark(c: char) -> bool {
+    c == '\u{30FC}'
+}
+
+/// Returns true for combining kana voicing marks (U+3099/U+309A).
+///
+/// Normally composed away by `normalize`; any remainder (lone or
+/// uncomposable, e.g. `を` + voiced) attaches to the preceding kana.
+pub fn is_kana_voicing_mark(c: char) -> bool {
+    matches!(c as u32, 0x3099..=0x309A)
 }
 
 /// Returns true for any CJK script character handled by this module.
@@ -163,7 +184,7 @@ pub fn is_ngram_char(c: char) -> bool {
 /// Katakana — so treating a script change as a token boundary recovers real
 /// word boundaries for free. Bigrams are never formed across a script change:
 /// `索エ` spans two different words and is pure noise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Script {
     /// Han ideographs.
     Han,
@@ -229,7 +250,7 @@ pub fn script_of(c: char) -> Script {
 }
 
 /// Default separator characters for CJK languages.
-pub const CJK_SEPARATORS: &str = " \t\n\r\x0C\x0B\x0D\u{00A0}";
+pub const CJK_SEPARATORS: &str = " \t\n\r\x0C\x0B\x0D\u{00A0}-";
 
 /// Tokenize text into CJK bigrams plus separator-delimited non-CJK words.
 ///
@@ -267,9 +288,16 @@ pub fn tokenize_cjk(text: &str, bigram_scripts: &[Script]) -> Vec<Token> {
             continue;
         }
 
-        // A run of a single CJK script.
+        // A run of a single CJK script. The prolonged mark `ー` and kana
+        // voicing marks inherit the current run: `ー` lengthens the previous
+        // mora rather than starting a Katakana word, and a voicing remainder
+        // attaches to its base. Splitting on them mints lone-mark tokens.
         let run_start = i;
-        while i < chars.len() && script_of(chars[i]) == script {
+        while i < chars.len()
+            && (script_of(chars[i]) == script
+                || is_prolonged_mark(chars[i])
+                || is_kana_voicing_mark(chars[i]))
+        {
             i += 1;
         }
         let run_len = i - run_start;
@@ -341,7 +369,13 @@ fn cluster_bounds(run: &[char], script: Script) -> Vec<usize> {
             }
         }
     } else {
-        bounds.extend(0..run.len());
+        for (offset, &c) in run.iter().enumerate() {
+            // Kana voicing remainders attach to their base; `ー` stays its own
+            // cluster so `らーめん` bigrams like katakana `ラーメン`.
+            if bounds.is_empty() || !is_kana_voicing_mark(c) {
+                bounds.push(offset);
+            }
+        }
     }
 
     bounds.push(run.len());
@@ -367,11 +401,93 @@ pub fn cjk_trim(token: &mut Token) -> bool {
             .chars()
             .all(|c| is_ngram_char(c) || is_combining_mark(c))
     {
+        // A term of only combining marks (lone voicing mark, stray vowel sign)
+        // is malformed text, not a linguistic unit — drop it rather than
+        // indexing noise.
+        if token.term.chars().all(is_combining_mark) {
+            return false;
+        }
+        // A lone prolonged mark is punctuation, not a syllable.
+        if token.term == "\u{30FC}" {
+            return false;
+        }
         return true;
     }
     // Non-ngram runs (Latin, digits): keep alphanumerics plus combining marks
     // so a trailing vowel/tone sign is not stripped off its base.
     token.trim_matching(|c| c.is_alphanumeric() || c == '_' || is_combining_mark(c))
+}
+
+/// Tokenize mixed-script text for word-based (non-bigramming) languages.
+///
+/// Splits on script boundaries before separator tokenization so CJK glued to
+/// Latin without a space (`hello検索`, `rust言語`) does not form one ghost
+/// term: the Latin part stays findable by a Latin query. CJK runs are emitted
+/// whole (not bigrammed) — bigramming is the CJK languages' job; here the
+/// goal is only to not glue across scripts.
+///
+/// Positions are `(char_offset, char_length)` into the normalized text.
+pub fn tokenize_with_script_split(text: &str, separators: &str) -> Vec<Token> {
+    tokenize_normalized_with_script_split(&normalize(text), separators)
+}
+
+/// [`tokenize_with_script_split`] over already-normalized text.
+///
+/// `normalized` must already be [`normalize`]d (or `normalize_tr`d for
+/// Turkish): positions are offsets into it.
+pub fn tokenize_normalized_with_script_split(normalized: &str, separators: &str) -> Vec<Token> {
+    let chars: Vec<char> = normalized.chars().collect();
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let script = script_of(chars[i]);
+        if script == Script::Other {
+            let run_start = i;
+            while i < chars.len() && script_of(chars[i]) == Script::Other {
+                i += 1;
+            }
+            let run: String = chars[run_start..i].iter().collect();
+            for t in tokenize_normalized(&run, separators) {
+                let (start, len) = t.position().unwrap_or((0, t.term.chars().count()));
+                let index = tokens.len();
+                tokens.push(Token::with_position(t.term, run_start + start, len, index));
+            }
+            continue;
+        }
+        // CJK script run (marks inherit, same rule as `tokenize_cjk`).
+        let run_start = i;
+        while i < chars.len()
+            && (script_of(chars[i]) == script
+                || is_prolonged_mark(chars[i])
+                || is_kana_voicing_mark(chars[i]))
+        {
+            i += 1;
+        }
+        let term: String = chars[run_start..i].iter().collect();
+        let index = tokens.len();
+        tokens.push(Token::with_position(term, run_start, i - run_start, index));
+    }
+    tokens
+}
+
+/// Whether a term spans more than one script (ghost mixed-script term).
+///
+/// Prolonged, voicing and combining marks are ignored — they inherit their
+/// base's script, so `らー` is Hiragana-only, not mixed. Used by
+/// `MultiLanguage` to drop member tokens like English `hello検索` that no
+/// query can reach.
+pub fn is_mixed_script(term: &str) -> bool {
+    let mut scripts = std::collections::HashSet::new();
+    for c in term.chars() {
+        if is_prolonged_mark(c) || is_kana_voicing_mark(c) || is_combining_mark(c) {
+            continue;
+        }
+        scripts.insert(script_of(c));
+        if scripts.len() > 1 {
+            return true;
+        }
+    }
+    scripts.len() > 1
 }
 
 #[cfg(test)]

@@ -21,7 +21,7 @@
 
 use crate::language::LanguageRef;
 use crate::normalize::normalize_for_language;
-use crate::query::{Clause, Presence, Query};
+use crate::query::{unescape_term, Clause, Presence, Query};
 
 /// Error produced when a query string cannot be parsed.
 #[derive(Debug, Clone, PartialEq)]
@@ -484,7 +484,11 @@ impl<'a> QueryParser<'a> {
                 end: 0,
             })?;
 
-        if !self.query.all_fields.contains(&lexeme.str) {
+        // Unescape: the lexer retains `\` before `*`/`\` so terms can
+        // distinguish wildcards, but field names never contain a backslash
+        // (builders reject it) — `a\*b` means field `a*b`.
+        let field = unescape_term(&lexeme.str);
+        if !self.query.all_fields.contains(&field) {
             let possible = self
                 .query
                 .all_fields
@@ -493,15 +497,12 @@ impl<'a> QueryParser<'a> {
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(self.error(
-                &format!(
-                    "unrecognised field '{}', possible fields: {}",
-                    lexeme.str, possible
-                ),
+                &format!("unrecognised field '{}', possible fields: {}", field, possible),
                 &lexeme,
             ));
         }
 
-        self.current_clause.fields = vec![lexeme.str.clone()];
+        self.current_clause.fields = vec![field];
 
         let next = self.peek_lexeme().ok_or_else(|| QueryParseError {
             message: "expecting term, found nothing".to_string(),
@@ -573,10 +574,20 @@ impl<'a> QueryParser<'a> {
                 end: 0,
             })?;
 
-        let distance = lexeme
-            .str
-            .parse::<usize>()
-            .map_err(|_| self.error("edit distance must be numeric", &lexeme))?;
+        let distance = lexeme.str.parse::<usize>().map_err(|_| {
+            // Empty lexeme means a bare `~`: the lexer `ignore()`d the
+            // operator, so the lexeme is zero-width just past it. Include the
+            // operator so the span underlines something.
+            if lexeme.str.is_empty() {
+                QueryParseError {
+                    message: "edit distance must be numeric".to_string(),
+                    start: lexeme.start.saturating_sub(1),
+                    end: lexeme.end,
+                }
+            } else {
+                self.error("edit distance must be numeric", &lexeme)
+            }
+        })?;
         self.current_clause.edit_distance = Some(distance);
 
         let Some(next) = self.peek_lexeme() else {
@@ -612,14 +623,26 @@ impl<'a> QueryParser<'a> {
                 end: 0,
             })?;
 
+        let boost_err = |message: &str| {
+            // Empty lexeme means a bare `^`: include the operator in the span.
+            if lexeme.str.is_empty() {
+                QueryParseError {
+                    message: message.to_string(),
+                    start: lexeme.start.saturating_sub(1),
+                    end: lexeme.end,
+                }
+            } else {
+                self.error(message, &lexeme)
+            }
+        };
         let boost = lexeme
             .str
             .parse::<f64>()
-            .map_err(|_| self.error("boost must be numeric", &lexeme))?;
+            .map_err(|_| boost_err("boost must be numeric"))?;
         // `1e400` parses to infinity, which would silently become 1.0 in
         // `Query::clause` and score exactly like no boost at all.
         if !boost.is_finite() {
-            return Err(self.error("boost must be finite", &lexeme));
+            return Err(boost_err("boost must be finite"));
         }
         self.current_clause.boost = boost;
 
