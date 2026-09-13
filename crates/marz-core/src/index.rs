@@ -778,7 +778,57 @@ impl Index {
                     continue;
                 }
                 let fold = folds[ti];
-                for expanded in self.expand_clause_term(&clause.term, term, clause.edit_distance) {
+                // Wildcard clauses bypass the pipeline (see `expand_clause_term`),
+                // but the index keys are STEMMED terms. Expansion of the raw
+                // surface form `searchable*` looks for tokens starting with
+                // "searchable" while the token set holds "searchabl" — a quiet
+                // zero-hit query for every word whose stem differs from its
+                // surface form. Stemming the pattern body first ("searchable"
+                // -> "searchabl", then expanding "searchabl*") matches how the
+                // index was built. A stem never lengthens a word, so prefix
+                // expansion after stemming matches at least what the raw
+                // prefix would have matched, and never less, for stemmed
+                // languages; for unstemmed languages it is the identity.
+                // `term*~N` keeps wildcard semantics (fuzzy+wildcard is
+                // defined as wildcard-only), so it stems too.
+                let expansion_term = if crate::query::has_unescaped_wildcard(&clause.term) {
+                    // Stem only the word body: strip the wildcard markers, run
+                    // the language stemmer, and rebuild the pattern body with
+                    // the SAME star markers the clause had — `expand` treats
+                    // the term as the pattern, so a bare stemmed body would
+                    // make stars-only patterns match exactly. Leading and
+                    // trailing markers survive; embedded stars don't (the
+                    // stemmer sees the body as one word).
+                    let leading = term.starts_with('*');
+                    let leading_escaped = clause.term.starts_with("\\*");
+                    let trailing = term.ends_with('*') && !leading_escaped;
+                    let body = term.trim_matches('*');
+                    if body.is_empty() || clause.term.contains("\\*") {
+                        // A stars-only pattern (`**`) or an escaped-star mix
+                        // has no safe one-word body; keep the term untouched.
+                        term.clone()
+                    } else {
+                        let stem = self.pipeline.language.stem(body);
+                        // The stem never lengthens into a new wildcard shape:
+                        // markers are re-attached around it verbatim, so
+                        // `stem(body)` expanding under the original pattern
+                        // matches every branch the body had.
+                        let mut out = String::with_capacity(stem.len() + 2);
+                        if leading && !leading_escaped {
+                            out.push('*');
+                        }
+                        out.push_str(&stem);
+                        if trailing {
+                            out.push('*');
+                        }
+                        out
+                    }
+                } else {
+                    term.clone()
+                };
+                for expanded in
+                    self.expand_clause_term(&clause.term, &expansion_term, clause.edit_distance)
+                {
                     if !seen.insert(expanded.clone()) {
                         continue;
                     }
@@ -1240,6 +1290,49 @@ mod tests {
         let index = test_index();
         let results = index.search("pl*").unwrap();
         assert!(results.iter().any(|r| r.ref_id == "b"));
+    }
+
+    #[test]
+    fn search_wildcard_matches_surface_form_of_stemmed_terms() {
+        // The token set holds STEMMED terms (`searchable` indexes as
+        // `searchabl`). A wildcard clause bypasses the pipeline, so expansion
+        // of the raw surface form `searchable*` must still reach `searchabl`:
+        // the pattern body is stemmed first, with the star re-attached.
+        // Without this, every word whose stem differs from its surface form
+        // silently returned zero hits — the common typeahead case.
+        let mut builder = IndexBuilder::new(en());
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("d", 1.0, |_| {
+            Some("searchable readable content".to_string())
+        });
+        let index = builder.build();
+        for query in ["searchable*", "readable*"] {
+            let hits = index.search(query).unwrap();
+            assert_eq!(
+                hits.iter().map(|h| h.ref_id.as_str()).collect::<Vec<_>>(),
+                vec!["d"],
+                "surface form + star must meet its stem: {query}"
+            );
+        }
+        // Stem form + star still works, and bare terms keep matching.
+        for query in ["searchabl*", "searchable"] {
+            assert!(!index.search(query).unwrap().is_empty(), "{query}");
+        }
+        // Prefix of the stem keeps its wildcard recall (lunr typeahead).
+        assert!(!index.search("search*").unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_leading_wildcard_with_stemmed_body() {
+        // Leading star + body: the star survives round-tripping the stem.
+        let mut builder = IndexBuilder::new(en());
+        builder.ref_field("id").field("body", 1.0);
+        builder.add("d", 1.0, |_| Some("candlestick besmoothed".to_string()));
+        let index = builder.build();
+        // stem("andlestick") == "andleystick"; "*andlestick*" must still
+        // find the indexed "candlestick" (stem "candlestick").
+        let hits = index.search("*andlestick*").unwrap();
+        assert!(hits.iter().any(|h| h.ref_id == "d"));
     }
 
     #[test]

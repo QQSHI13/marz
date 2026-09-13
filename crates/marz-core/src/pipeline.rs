@@ -6,7 +6,11 @@ use crate::token::Token;
 /// A pipeline holds a list of functions applied to tokens.
 pub struct Pipeline {
     /// Language configuration used by the pipeline.
-    language: LanguageRef,
+    ///
+    /// `pub(crate)`: `Index::search` stems wildcard pattern bodies here
+    /// (wildcard clauses bypass the pipeline, but the token set holds
+    /// stemmed terms — see the expansion site in `index.rs`).
+    pub(crate) language: LanguageRef,
 }
 
 impl Pipeline {
