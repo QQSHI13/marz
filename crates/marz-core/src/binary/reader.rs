@@ -143,7 +143,9 @@ impl<'a> BinaryIndex<'a> {
         // Reject unknown flag bits: a future layout-changing flag silently
         // misread as v1 would produce wrong results rather than an error.
         if header.flags & !FLAG_HAS_POSITIONS != 0 {
-            return Err(FormatError::InvalidFlags { flags: header.flags });
+            return Err(FormatError::InvalidFlags {
+                flags: header.flags,
+            });
         }
 
         // Establishing this once is what lets every later accessor slice its own
@@ -185,9 +187,7 @@ impl<'a> BinaryIndex<'a> {
         // Flag/section consistency: an index built without positions must
         // have an empty positions section. Otherwise a flipped flag bit is
         // silently accepted and phrase verification just stops working.
-        if header.flags & FLAG_HAS_POSITIONS == 0
-            && header.positions_offset != header.end_offset
-        {
+        if header.flags & FLAG_HAS_POSITIONS == 0 && header.positions_offset != header.end_offset {
             return Err(FormatError::Truncated {
                 section: "positions",
             });

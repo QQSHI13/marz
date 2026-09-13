@@ -25,7 +25,9 @@ impl Language for English {
     }
 
     fn is_stop_word(&self, term: &str) -> bool {
-        STOP_WORDS.binary_search(&term.to_lowercase().as_str()).is_ok()
+        STOP_WORDS
+            .binary_search(&term.to_lowercase().as_str())
+            .is_ok()
     }
 
     fn stem(&self, term: &str) -> String {

@@ -497,7 +497,10 @@ impl<'a> QueryParser<'a> {
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(self.error(
-                &format!("unrecognised field '{}', possible fields: {}", field, possible),
+                &format!(
+                    "unrecognised field '{}', possible fields: {}",
+                    field, possible
+                ),
                 &lexeme,
             ));
         }
