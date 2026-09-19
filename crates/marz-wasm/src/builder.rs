@@ -66,6 +66,7 @@ pub struct MarzBuilder {
     docs: Vec<StagedDoc>,
     k1: f64,
     b: f64,
+    rehydrated: Option<CoreBuilder>,
 }
 
 #[wasm_bindgen]
@@ -118,6 +119,45 @@ impl MarzBuilder {
             docs: Vec::new(),
             k1,
             b,
+            rehydrated: None,
+        })
+    }
+
+    /// Rehydrate a builder from a loaded index for incremental updates.
+    ///
+    /// Clones the index's postings into a builder, restoring the declared
+    /// fields (names and boosts) and the language, so documents can be added
+    /// or removed without re-adding the whole corpus. The reference field
+    /// name is not stored in the index, so pass it again here when it is not
+    /// `"id"`. `k1`/`b` come along with the index: this takes none, and the
+    /// stored tuning is kept — there is nothing to set.
+    ///
+    /// Staged additions still go through `add` and are applied on `build`,
+    /// which clones the restored state — building twice gives two equivalent
+    /// indexes, as with a fresh builder.
+    #[wasm_bindgen(js_name = "fromIndex")]
+    pub fn from_index(
+        index: &crate::MarzIndex,
+        ref_field: Option<String>,
+    ) -> Result<MarzBuilder, JsValue> {
+        let ref_field = ref_field.unwrap_or_else(|| "id".to_string());
+        if ref_field.trim().is_empty() {
+            return Err(error("refField must not be empty"));
+        }
+        let (core_index, language_code) = index.clone_parts();
+        let mut core = CoreBuilder::from_index(core_index);
+        core.ref_field(ref_field.trim().to_string());
+        let fields = core.declared_fields();
+        Ok(MarzBuilder {
+            language_code,
+            ref_field: ref_field.trim().to_string(),
+            fields,
+            docs: Vec::new(),
+            // Unused in rehydrated builds: the restored core builder already
+            // carries the index's tuning.
+            k1: 1.2,
+            b: 0.75,
+            rehydrated: Some(core),
         })
     }
 
@@ -182,6 +222,12 @@ impl MarzBuilder {
             None => 1.0,
         };
         self.fields.push((name.to_string(), boost));
+        // A rehydrated builder indexes through the restored core builder, not
+        // through a fresh one assembled at `build`, so a newly declared field
+        // must reach both lists or its staged text would be silently dropped.
+        if let Some(core) = self.rehydrated.as_mut() {
+            core.field(name.to_string(), boost);
+        }
         Ok(())
     }
 
@@ -267,8 +313,40 @@ impl MarzBuilder {
         Ok(())
     }
 
+    /// Remove the document with reference `docRef`.
+    ///
+    /// Returns `true` when a document was present and removed, `false` when
+    /// no document used that reference. Only a builder from `fromIndex` can
+    /// remove: a fresh builder holds nothing to remove from, so it throws
+    /// rather than silently returning `false`. Staged additions with the same
+    /// reference are dropped as well, so a removed document stays removed at
+    /// the next `build`. A removal already applied is not undone by `clear`.
+    pub fn remove(&mut self, doc_ref: &str) -> Result<bool, JsValue> {
+        let Some(core) = self.rehydrated.as_mut() else {
+            return Err(error(
+                "remove() needs a builder from MarzBuilder.fromIndex(); \
+                 a fresh builder holds nothing to remove",
+            ));
+        };
+        let staged = self.docs.iter().any(|d| d.doc_ref == doc_ref);
+        self.docs.retain(|d| d.doc_ref != doc_ref);
+        Ok(core.remove(doc_ref) || staged)
+    }
+
     /// Shared core-builder construction (fields + docs + BM25 params).
+    ///
+    /// A rehydrated builder clones its restored state and applies the staged
+    /// documents on top, so removals and upserts both survive repeated builds.
     fn core_builder(&self) -> CoreBuilder {
+        if let Some(core) = &self.rehydrated {
+            let mut builder = core.clone();
+            for doc in &self.docs {
+                builder.add(doc.doc_ref.clone(), doc.boost, |name| {
+                    doc.fields.get(name).cloned()
+                });
+            }
+            return builder;
+        }
         // Silent resolve: `new` already warned for an unknown code; warning
         // again on every `build`/`buildAndLoad` would double-report one typo.
         let language = language_for_load(&self.language_code);
@@ -299,10 +377,10 @@ impl MarzBuilder {
     /// a `build()` that quietly emptied the builder would turn a stray second
     /// call into a silently empty search index.
     pub fn build(&self, positions: Option<bool>) -> Result<Vec<u8>, JsValue> {
-        Ok(self
-            .core_builder()
+        self.core_builder()
             .build()
-            .to_binary(positions.unwrap_or(true)))
+            .to_binary(positions.unwrap_or(true))
+            .map_err(|e| error(&e.to_string()))
     }
 
     /// Build and load in one step, skipping the serialize/parse round trip.
@@ -349,5 +427,53 @@ impl MarzBuilder {
     #[wasm_bindgen(getter)]
     pub fn language(&self) -> String {
         self.language_code.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two-document fixture, built through core: `add` needs live JavaScript
+    /// objects, which the host test runner does not have.
+    fn fixture_bytes() -> Vec<u8> {
+        let language = marz_core::languages::registry::resolve("en").language;
+        let mut builder = CoreBuilder::new(language);
+        builder
+            .ref_field("id")
+            .field("title", 10.0)
+            .field("body", 1.0);
+        builder.add("a", 1.0, |name| match name {
+            "title" => Some("green apples".to_string()),
+            "body" => Some("green orchard".to_string()),
+            _ => None,
+        });
+        builder.add("b", 1.0, |name| match name {
+            "title" => Some("plumb pipes".to_string()),
+            "body" => Some("lead pipes".to_string()),
+            _ => None,
+        });
+        builder.build().to_binary(true).expect("fixture")
+    }
+
+    #[test]
+    fn from_index_restores_fields_and_removes() {
+        let bytes = fixture_bytes();
+        let index = crate::MarzIndex::load(&bytes, None).expect("fixture loads");
+        let mut builder = MarzBuilder::from_index(&index, None).expect("rehydrates");
+        assert_eq!(
+            builder.fields(),
+            vec!["title".to_string(), "body".to_string()]
+        );
+        assert_eq!(builder.language(), "en");
+        assert_eq!(builder.staged(), 0);
+        assert!(builder.remove("a").expect("removes"));
+        assert!(!builder.remove("missing").expect("reports absence"));
+        assert!(!builder.remove("a").expect("reports second removal"));
+        let rebuilt = builder.build_and_load().expect("rebuilds");
+        assert_eq!(rebuilt.document_count(), 1);
+        // Building again clones the restored state, so the removal survives.
+        let again = builder.build_and_load().expect("rebuilds twice");
+        assert_eq!(again.document_count(), 1);
     }
 }

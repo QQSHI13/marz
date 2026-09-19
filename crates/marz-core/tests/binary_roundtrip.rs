@@ -134,7 +134,7 @@ fn assert_same_results(original: &Index, roundtripped: &Index, query: &str) {
 #[test]
 fn english_search_is_identical_after_a_binary_roundtrip() {
     let index = build(Arc::new(English), EN_DOCS);
-    let bytes = index.to_binary(true);
+    let bytes = index.to_binary(true).unwrap();
     let loaded = Index::from_binary(&bytes, Arc::new(English)).unwrap();
 
     for query in [
@@ -163,7 +163,7 @@ fn japanese_search_is_identical_after_a_binary_roundtrip() {
     // The case the format exists for: bigram postings, many positions, and
     // phrase verification that depends on those positions being exact.
     let index = build(Arc::new(Japanese), JA_DOCS);
-    let bytes = index.to_binary(true);
+    let bytes = index.to_binary(true).unwrap();
     let loaded = Index::from_binary(&bytes, Arc::new(Japanese)).unwrap();
 
     for query in [
@@ -185,7 +185,7 @@ fn japanese_search_is_identical_after_a_binary_roundtrip() {
 #[test]
 fn korean_search_is_identical_after_a_binary_roundtrip() {
     let index = build(Arc::new(Korean), KO_DOCS);
-    let bytes = index.to_binary(true);
+    let bytes = index.to_binary(true).unwrap();
     let loaded = Index::from_binary(&bytes, Arc::new(Korean)).unwrap();
 
     for query in ["검색엔진", "검색", "기계학습", "인공지능", "색인"] {
@@ -199,7 +199,7 @@ fn phrase_boost_still_applies_after_a_roundtrip() {
     // that lost or shifted them would silently stop boosting — the scores would
     // still be plausible, just wrong. Assert the ranking the boost produces.
     let index = build(Arc::new(Japanese), JA_DOCS);
-    let loaded = Index::from_binary(&index.to_binary(true), Arc::new(Japanese)).unwrap();
+    let loaded = Index::from_binary(&index.to_binary(true).unwrap(), Arc::new(Japanese)).unwrap();
 
     let results = loaded.search("検索エンジン").unwrap();
     assert_eq!(
@@ -214,8 +214,8 @@ fn positions_free_index_scores_the_same_but_loses_positions() {
     // Dropping positions is a size/feature tradeoff, not a scoring one: BM25
     // reads the stored term frequency, never the position count.
     let index = build(Arc::new(English), EN_DOCS);
-    let with = index.to_binary(true);
-    let without = index.to_binary(false);
+    let with = index.to_binary(true).unwrap();
+    let without = index.to_binary(false).unwrap();
     assert!(
         without.len() < with.len(),
         "positions-free index is {} bytes, not smaller than {}",
@@ -248,7 +248,7 @@ fn document_refs_with_slashes_survive() {
     // these. The binary format interns references whole, so there is nothing to
     // parse — this test pins that.
     let index = build(Arc::new(English), EN_DOCS);
-    let bytes = index.to_binary(true);
+    let bytes = index.to_binary(true).unwrap();
     let binary = BinaryIndex::open(&bytes).unwrap();
 
     let mut refs: Vec<&str> = (0..binary.doc_count() as u32)
@@ -266,7 +266,7 @@ fn empty_index_roundtrips() {
     builder.ref_field("id").field("body", 1.0);
     let index = builder.build();
 
-    let bytes = index.to_binary(true);
+    let bytes = index.to_binary(true).unwrap();
     let loaded = Index::from_binary(&bytes, Arc::new(English)).unwrap();
     assert_eq!(loaded.document_count(), 0);
     assert_eq!(loaded.term_count(), 0);
@@ -276,7 +276,7 @@ fn empty_index_roundtrips() {
 #[test]
 fn truncated_binary_index_is_rejected_not_misread() {
     let index = build(Arc::new(Japanese), JA_DOCS);
-    let bytes = index.to_binary(true);
+    let bytes = index.to_binary(true).unwrap();
 
     // Every truncation either fails to load, or loads and answers queries
     // without panicking. What must never happen is a panic or a hang.

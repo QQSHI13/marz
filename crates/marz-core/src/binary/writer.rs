@@ -20,6 +20,43 @@ use super::varint::{write_str, write_varint};
 use super::{FLAG_HAS_POSITIONS, FORMAT_VERSION, HEADER_LEN, MAGIC, TERMS_PER_BLOCK};
 use crate::index::Posting;
 
+/// An error encountered while serializing an index to the binary format.
+///
+/// The only failure is size: the format addresses counts and offsets with
+/// `u32` and caps the file at 4 GiB, so an index that does not fit cannot be
+/// represented. Small indexes serialize byte-identically with or without this
+/// error type — it only replaces what used to panic on huge ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteError {
+    /// A count or offset does not fit the `u32` the format stores.
+    TooLarge {
+        /// What did not fit (e.g. `"document count"`, `"postings offset"`).
+        what: &'static str,
+    },
+}
+
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge { what } => write!(
+                f,
+                "index too large to serialize: {what} exceeds the u32-addressed binary format"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WriteError {}
+
+/// Convert a `usize` count or offset to the `u32` the format stores.
+///
+/// A value that does not fit means the index exceeds the format (more than
+/// ~4 billion documents or terms, or a file over 4 GiB): an error, not a
+/// panic.
+fn u32_len(value: usize, what: &'static str) -> Result<u32, WriteError> {
+    u32::try_from(value).map_err(|_| WriteError::TooLarge { what })
+}
+
 /// Everything the writer needs from a built index.
 ///
 /// A borrowed snapshot rather than `&Index` so the writer does not need access
@@ -54,32 +91,30 @@ pub struct IndexSnapshot<'a> {
 }
 
 /// Serialize an index to the binary format.
-pub fn write_index(snapshot: &IndexSnapshot<'_>) -> Vec<u8> {
+///
+/// Fails with [`WriteError::TooLarge`] when a count or offset does not fit
+/// the `u32`-addressed format — a huge index, never a small one.
+pub fn write_index(snapshot: &IndexSnapshot<'_>) -> Result<Vec<u8>, WriteError> {
     let doc_refs = collect_doc_refs(snapshot);
     let doc_ids: HashMap<&str, u32> = doc_refs
         .iter()
         .enumerate()
-        .map(|(i, r)| (*r, u32::try_from(i).expect("doc count exceeds u32")))
-        .collect();
+        .map(|(i, r)| Ok((*r, u32_len(i, "document count")?)))
+        .collect::<Result<_, WriteError>>()?;
     let field_ids: HashMap<&str, u32> = snapshot
         .fields
         .iter()
         .enumerate()
-        .map(|(i, f)| {
-            (
-                f.as_str(),
-                u32::try_from(i).expect("field count exceeds u32"),
-            )
-        })
-        .collect();
+        .map(|(i, f)| Ok((f.as_str(), u32_len(i, "field count")?)))
+        .collect::<Result<_, WriteError>>()?;
 
     let terms: Vec<&String> = snapshot.inverted_index.keys().collect();
 
     let meta = build_meta(snapshot);
-    let docs = build_docs(snapshot, &doc_refs, &field_ids);
+    let docs = build_docs(snapshot, &doc_refs, &field_ids)?;
     let (postings, positions, postings_offsets) =
-        build_postings(snapshot, &doc_ids, &field_ids, &terms);
-    let terms_section = build_terms(&terms, &postings_offsets);
+        build_postings(snapshot, &doc_ids, &field_ids, &terms)?;
+    let terms_section = build_terms(&terms, &postings_offsets)?;
 
     // Sections are laid out in the order the header declares them.
     let meta_offset = HEADER_LEN;
@@ -98,11 +133,10 @@ pub fn write_index(snapshot: &IndexSnapshot<'_>) -> Vec<u8> {
         0
     };
     out.extend_from_slice(&flags.to_le_bytes());
-    let doc_count_u32 = u32::try_from(doc_refs.len()).expect("doc count exceeds u32");
-    let document_count_u32 =
-        u32::try_from(snapshot.document_count).expect("document count exceeds u32");
-    let field_count_u32 = u32::try_from(snapshot.fields.len()).expect("field count exceeds u32");
-    let term_count_u32 = u32::try_from(terms.len()).expect("term count exceeds u32");
+    let doc_count_u32 = u32_len(doc_refs.len(), "document count")?;
+    let document_count_u32 = u32_len(snapshot.document_count, "document count")?;
+    let field_count_u32 = u32_len(snapshot.fields.len(), "field count")?;
+    let term_count_u32 = u32_len(terms.len(), "term count")?;
     out.extend_from_slice(&doc_count_u32.to_le_bytes());
     out.extend_from_slice(&document_count_u32.to_le_bytes());
     out.extend_from_slice(&field_count_u32.to_le_bytes());
@@ -117,11 +151,7 @@ pub fn write_index(snapshot: &IndexSnapshot<'_>) -> Vec<u8> {
         positions_offset,
         end_offset,
     ] {
-        out.extend_from_slice(
-            &u32::try_from(offset)
-                .expect("index exceeds 4 GiB")
-                .to_le_bytes(),
-        );
+        out.extend_from_slice(&u32_len(offset, "index size")?.to_le_bytes());
     }
     debug_assert_eq!(out.len(), HEADER_LEN, "header must be exactly HEADER_LEN");
 
@@ -130,7 +160,7 @@ pub fn write_index(snapshot: &IndexSnapshot<'_>) -> Vec<u8> {
     out.extend_from_slice(&terms_section);
     out.extend_from_slice(&postings);
     out.extend_from_slice(&positions);
-    out
+    Ok(out)
 }
 
 /// Every document reference in the index, sorted.
@@ -184,7 +214,7 @@ fn build_docs(
     snapshot: &IndexSnapshot<'_>,
     doc_refs: &[&str],
     field_ids: &HashMap<&str, u32>,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, WriteError> {
     let field_count = snapshot.fields.len();
     let mut out = Vec::new();
 
@@ -193,10 +223,10 @@ fn build_docs(
     let mut heap = Vec::new();
     let mut table: Vec<u32> = Vec::with_capacity(doc_refs.len() + 1);
     for doc_ref in doc_refs {
-        table.push(u32::try_from(heap.len()).expect("index exceeds 4 GiB"));
+        table.push(u32_len(heap.len(), "document reference heap")?);
         heap.extend_from_slice(doc_ref.as_bytes());
     }
-    table.push(u32::try_from(heap.len()).expect("index exceeds 4 GiB"));
+    table.push(u32_len(heap.len(), "document reference heap")?);
     for offset in &table {
         out.extend_from_slice(&offset.to_le_bytes());
     }
@@ -218,8 +248,7 @@ fn build_docs(
             let Some(field_id) = field_ids.get(field_name.as_str()) else {
                 continue;
             };
-            lengths[doc_id * field_count + *field_id as usize] =
-                u32::try_from(*length).expect("field length exceeds u32");
+            lengths[doc_id * field_count + *field_id as usize] = u32_len(*length, "field length")?;
         }
     }
     for length in &lengths {
@@ -227,8 +256,12 @@ fn build_docs(
     }
 
     out.extend_from_slice(&heap);
-    out
+    Ok(out)
 }
+
+/// The serialized postings and positions sections, plus each term's relative
+/// postings offset (with a terminator, so term `id` spans `offsets[id]`).
+type PostingSections = (Vec<u8>, Vec<u8>, Vec<u32>);
 
 /// Postings and positions, plus each term's relative postings offset.
 ///
@@ -239,13 +272,13 @@ fn build_postings(
     doc_ids: &HashMap<&str, u32>,
     field_ids: &HashMap<&str, u32>,
     terms: &[&String],
-) -> (Vec<u8>, Vec<u8>, Vec<u32>) {
+) -> Result<PostingSections, WriteError> {
     let mut postings = Vec::new();
     let mut positions = Vec::new();
     let mut offsets: Vec<u32> = Vec::with_capacity(terms.len() + 1);
 
     for term in terms {
-        offsets.push(u32::try_from(postings.len()).expect("index exceeds 4 GiB"));
+        offsets.push(u32_len(postings.len(), "postings offset")?);
         let posting = &snapshot.inverted_index[*term];
 
         // Order the term's fields by id, and each field's documents by id, so
@@ -304,9 +337,9 @@ fn build_postings(
             }
         }
     }
-    offsets.push(u32::try_from(postings.len()).expect("index exceeds 4 GiB"));
+    offsets.push(u32_len(postings.len(), "postings offset")?);
 
-    (postings, positions, offsets)
+    Ok((postings, positions, offsets))
 }
 
 /// Append one posting's positions.
@@ -357,13 +390,13 @@ fn write_position_block(out: &mut Vec<u8>, positions: &[(usize, usize)]) {
 }
 
 /// Front-coded term dictionary, its block index, and the postings offset table.
-fn build_terms(terms: &[&String], postings_offsets: &[u32]) -> Vec<u8> {
+fn build_terms(terms: &[&String], postings_offsets: &[u32]) -> Result<Vec<u8>, WriteError> {
     let block_count = terms.len().div_ceil(TERMS_PER_BLOCK);
 
     let mut dictionary = Vec::new();
     let mut block_offsets: Vec<u32> = Vec::with_capacity(block_count + 1);
     for block in terms.chunks(TERMS_PER_BLOCK) {
-        block_offsets.push(u32::try_from(dictionary.len()).expect("index exceeds 4 GiB"));
+        block_offsets.push(u32_len(dictionary.len(), "term dictionary")?);
         // The first term of each block is stored whole. That is what lets a
         // lookup binary search to a block and start decoding there instead of
         // from the beginning of the dictionary.
@@ -376,7 +409,7 @@ fn build_terms(terms: &[&String], postings_offsets: &[u32]) -> Vec<u8> {
             previous = term;
         }
     }
-    block_offsets.push(u32::try_from(dictionary.len()).expect("index exceeds 4 GiB"));
+    block_offsets.push(u32_len(dictionary.len(), "term dictionary")?);
 
     let mut out =
         Vec::with_capacity((block_offsets.len() + postings_offsets.len()) * 4 + dictionary.len());
@@ -387,7 +420,7 @@ fn build_terms(terms: &[&String], postings_offsets: &[u32]) -> Vec<u8> {
         out.extend_from_slice(&offset.to_le_bytes());
     }
     out.extend_from_slice(&dictionary);
-    out
+    Ok(out)
 }
 
 /// Length of the longest shared prefix of `a` and `b` that ends on a UTF-8
@@ -519,7 +552,7 @@ mod tests {
     fn header_is_exactly_sixty_four_bytes_and_offsets_are_ordered() {
         let fixture = fixture();
         let snapshot = fixture.snapshot();
-        let bytes = write_index(&snapshot);
+        let bytes = write_index(&snapshot).unwrap();
 
         assert_eq!(&bytes[0..4], b"MARZ");
         // Section offsets must ascend and the last must equal the file length,
@@ -595,10 +628,24 @@ mod tests {
     fn omitting_positions_shrinks_the_file() {
         let fixture = fixture();
         let mut snapshot = fixture.snapshot();
-        let with = write_index(&snapshot).len();
+        let with = write_index(&snapshot).unwrap().len();
         snapshot.include_positions = false;
-        let without = write_index(&snapshot).len();
+        let without = write_index(&snapshot).unwrap().len();
         assert!(without < with, "{without} should be under {with}");
+    }
+
+    #[test]
+    fn oversized_counts_are_an_error_not_a_panic() {
+        // The guard condition without a 4 GiB allocation: `document_count`
+        // is a bare number in the snapshot, so overflowing it costs nothing —
+        // yet the old `expect` panicked on exactly this.
+        let fixture = fixture();
+        let mut snapshot = fixture.snapshot();
+        snapshot.document_count = u32::MAX as usize + 1;
+        assert!(
+            matches!(write_index(&snapshot), Err(WriteError::TooLarge { .. })),
+            "an overflowing count must error, not panic"
+        );
     }
 
     #[test]
@@ -618,7 +665,8 @@ mod tests {
             .map(|(i, name)| (name.as_str(), i as u32))
             .collect();
         let terms: Vec<&String> = fixture.inverted_index.keys().collect();
-        let (postings, _, offsets) = build_postings(&snapshot, &doc_ids, &field_ids, &terms);
+        let (postings, _, offsets) =
+            build_postings(&snapshot, &doc_ids, &field_ids, &terms).unwrap();
 
         assert_eq!(offsets.len(), terms.len() + 1);
         assert_eq!(*offsets.last().unwrap() as usize, postings.len());

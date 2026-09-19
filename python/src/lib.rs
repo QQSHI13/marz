@@ -24,7 +24,7 @@ use marz_core::{Index as CoreIndex, IndexBuilder as CoreBuilder, Language};
 use pyo3::create_exception;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 
 create_exception!(
     _marz,
@@ -134,14 +134,22 @@ fn field_text(doc: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<String>> {
         return Ok(None);
     }
     value.extract::<String>().map(Some).map_err(|_| {
-        PyTypeError::new_err(format!(
-            "field {name:?} must be a str or None, got {}",
-            value
-                .get_type()
-                .name()
-                .map(|n| n.to_string())
-                .unwrap_or_else(|_| "?".to_string())
-        ))
+        let type_name = value
+            .get_type()
+            .name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|_| "?".to_string());
+        // A real string that fails extraction holds lone surrogates, which a
+        // Rust `String` cannot represent: a value problem, not a type problem.
+        if value.is_instance_of::<PyString>() {
+            PyValueError::new_err(format!(
+                "field {name:?} contains lone surrogates and cannot be indexed as text"
+            ))
+        } else {
+            PyTypeError::new_err(format!(
+                "field {name:?} must be a str or None, got {type_name}"
+            ))
+        }
     })
 }
 
@@ -198,6 +206,7 @@ pub struct IndexBuilder {
     docs: Vec<StagedDoc>,
     k1: f64,
     b: f64,
+    rehydrated: Option<CoreBuilder>,
 }
 
 #[pymethods]
@@ -235,6 +244,44 @@ impl IndexBuilder {
             docs: Vec::new(),
             k1,
             b,
+            rehydrated: None,
+        })
+    }
+
+    /// Rehydrate a builder from a built index for incremental updates.
+    ///
+    /// Clones the index's postings into a builder, restoring the declared
+    /// fields (names and boosts) and the language, so documents can be added
+    /// or removed without re-adding the whole corpus. The reference field
+    /// name is not stored in the index, so pass it again here when it is not
+    /// `"id"`. `k1`/`b` come along with the index: this constructor takes
+    /// none, and the `k1`/`b` attributes on the result are defaults the
+    /// rehydrated build ignores.
+    ///
+    /// Staged additions still go through `add` and are applied on `build`,
+    /// which clones the restored state — building twice gives two equivalent
+    /// indexes, as with a fresh builder.
+    #[staticmethod]
+    #[pyo3(signature = (index, *, ref_field = "id"))]
+    fn from_index(index: &Index, ref_field: &str) -> PyResult<Self> {
+        if ref_field.trim().is_empty() {
+            return Err(PyValueError::new_err("ref_field must not be empty"));
+        }
+        let mut core = CoreBuilder::from_index((*index.inner).clone());
+        core.ref_field(ref_field.trim().to_string());
+        let fields = core.declared_fields();
+        let language_code = index.language_code.clone();
+        // Silent resolve: the stored code is legitimate, not a typo.
+        let language = language_for_load(&language_code);
+        Ok(Self {
+            language_code,
+            language,
+            ref_field: ref_field.trim().to_string(),
+            fields,
+            docs: Vec::new(),
+            k1: 1.2,
+            b: 0.75,
+            rehydrated: Some(core),
         })
     }
 
@@ -291,7 +338,14 @@ impl IndexBuilder {
                  pass a different ref_field to index it as text"
             )));
         }
-        self.fields.push((name.to_string(), boost.max(0.0)));
+        let boost = boost.max(0.0);
+        self.fields.push((name.to_string(), boost));
+        // A rehydrated builder indexes through the restored core builder, not
+        // through a fresh one assembled at `build`, so a newly declared field
+        // must reach both lists or its staged text would be silently dropped.
+        if let Some(core) = self.rehydrated.as_mut() {
+            core.field(name.to_string(), boost);
+        }
         Ok(())
     }
 
@@ -358,6 +412,26 @@ impl IndexBuilder {
         Ok(())
     }
 
+    /// Remove the document with reference `doc_ref`.
+    ///
+    /// Returns `True` when a document was present and removed, `False` when
+    /// no document used that reference. Only a builder from `from_index` can
+    /// remove: a fresh builder holds nothing to remove from, so it raises
+    /// rather than silently returning `False`. Staged additions with the same
+    /// reference are dropped as well, so a removed document stays removed at
+    /// the next `build`. A removal already applied is not undone by `clear`.
+    fn remove(&mut self, doc_ref: &str) -> PyResult<bool> {
+        let Some(core) = self.rehydrated.as_mut() else {
+            return Err(PyValueError::new_err(
+                "remove() needs a builder from IndexBuilder.from_index(); \
+                 a fresh builder holds nothing to remove",
+            ));
+        };
+        let staged = self.docs.iter().any(|d| d.doc_ref == doc_ref);
+        self.docs.retain(|d| d.doc_ref != doc_ref);
+        Ok(core.remove(doc_ref) || staged)
+    }
+
     /// Tokenize and score the staged documents.
     ///
     /// This is the expensive call, and it releases the GIL: the documents were
@@ -367,7 +441,29 @@ impl IndexBuilder {
     /// equivalent indexes rather than an index and an empty one. Building is not
     /// cheap, but a `build()` that quietly emptied the builder would turn a
     /// stray second call into a silently empty search index.
+    ///
+    /// A builder from `from_index` instead clones its restored state and
+    /// applies the staged documents on top, so removals and upserts both
+    /// survive repeated builds.
     fn build(&self, py: Python<'_>) -> Index {
+        if let Some(core) = &self.rehydrated {
+            let base = core.clone();
+            let docs = &self.docs;
+            let language_code = self.language_code.clone();
+            let index = py.detach(move || {
+                let mut builder = base;
+                for doc in docs {
+                    builder.add(doc.doc_ref.clone(), doc.boost, |name| {
+                        doc.fields.get(name).cloned()
+                    });
+                }
+                builder.build()
+            });
+            return Index {
+                inner: Arc::new(index),
+                language_code,
+            };
+        }
         let language = self.language.clone();
         let ref_field = self.ref_field.clone();
         let fields = self.fields.clone();
@@ -511,7 +607,9 @@ impl Index {
     ///
     /// Query syntax: bare terms, `+required`, `-prohibited`, `field:term`,
     /// `term*` wildcards, `term~N` fuzzy matching, and `^N` term boosts.
-    /// Raises `QueryError` if the query cannot be parsed.
+    /// A `*` wildcard wins over `~N`: `foo*~1` runs the wildcard search and
+    /// ignores the edit distance. Raises `QueryError` if the query cannot be
+    /// parsed (`start`/`end` on it are character offsets, not byte offsets).
     fn search(&self, py: Python<'_>, query: &str) -> PyResult<Vec<Hit>> {
         let index = self.inner.clone();
         let owned = query.to_string();
@@ -536,11 +634,16 @@ impl Index {
     /// data, which is about a tenth of the file. Note this also disables the
     /// CJK phrase ranking boost: search still works, but an exact phrase no
     /// longer outranks scattered bigrams.
+    ///
+    /// Raises `ValueError` when the index is too large for the `u32`-addressed
+    /// format — a huge index, never a small one.
     #[pyo3(signature = (*, positions = true))]
-    fn to_bytes<'py>(&self, py: Python<'py>, positions: bool) -> Bound<'py, PyBytes> {
+    fn to_bytes<'py>(&self, py: Python<'py>, positions: bool) -> PyResult<Bound<'py, PyBytes>> {
         let index = self.inner.clone();
-        let bytes = py.detach(move || index.to_binary(positions));
-        PyBytes::new(py, &bytes)
+        let bytes = py
+            .detach(move || index.to_binary(positions))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyBytes::new(py, &bytes))
     }
 
     /// Read an index from `to_bytes()` output.

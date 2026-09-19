@@ -193,7 +193,10 @@ export async function tokenize(
  * {@link highlight}. Async only for initialization — see {@link tokenize}.
  *
  * Pass the index's language for Turkish (`"tr"`), whose `I` folds to `ı`;
- * every other language folds the default way.
+ * every other language folds the default way. A multi-language code containing
+ * Turkish folds the default way instead — no single folding serves both
+ * members, so dotted-capital-I offsets in Turkish text may shift by a
+ * character; search itself is unaffected.
  */
 export async function normalize(
   text: string,
@@ -235,7 +238,9 @@ export interface Segment {
  * becomes one span, not two overlapping ones.
  *
  * Pass the index's language for Turkish (`"tr"`), whose normalization folds
- * differently — see {@link normalize}.
+ * differently — see {@link normalize}. A multi-language code containing
+ * Turkish folds the default way instead, so dotted-capital-I offsets in
+ * Turkish text may shift by a character; search itself is unaffected.
  *
  * ```ts
  * const segments = await highlight(hit, "body", doc.body);
@@ -342,4 +347,145 @@ export async function highlight(
     segments.push({ text: points.slice(cursor).join(""), matched: false });
   }
   return segments;
+}
+
+/**
+ * A client-side index builder, for content that only exists in the browser.
+ *
+ * This is the TypeScript shape of `MarzBuilder` from the WebAssembly module —
+ * written out here rather than imported from it, so that importing this module
+ * never requires a WebAssembly build with the `builder` feature. A search-only
+ * build (the default, and what `build-wasm.sh` produces without flags) has no
+ * `MarzBuilder` at all; the helpers below throw a plain `Error` saying so
+ * instead of failing on a missing export.
+ *
+ * The builder adds ~39 KB of WebAssembly for tokenization, scoring and
+ * serialization that a search box never runs. Ship the search-only module and
+ * reach for this only when the documents live client-side — a note-taking app
+ * whose notes are in IndexedDB, or a viewer indexing a file the user just
+ * dropped on the page.
+ */
+export interface ClientBuilder {
+  /** How many documents are staged and ready to build. */
+  readonly staged: number;
+  /** The declared field names, in declaration order. */
+  readonly fields: string[];
+  /** The configured reference field. */
+  readonly refField: string;
+  /** The configured language code. */
+  readonly language: string;
+  /** Declare a searchable field. `boost` multiplies the score of matches in it. */
+  field(name: string, boost?: number): void;
+  /** Stage a document for indexing. Same reference twice replaces (upsert). */
+  add(doc: unknown, boost?: number): void;
+  /** Stage every document in an iterable. Equivalent to `add` in a loop. */
+  addMany(docs: unknown, boost?: number): void;
+  /**
+   * Remove the document with reference `docRef`.
+   *
+   * Returns `true` when a document was present and removed, `false` when no
+   * document used that reference. Only a builder from {@link builderFromIndex}
+   * can remove; a fresh builder throws.
+   */
+  remove(docRef: string): boolean;
+  /** Tokenize and score the staged documents, returning the binary index. */
+  build(positions?: boolean): Uint8Array;
+  /** Build and load in one step, skipping the serialize/parse round trip. */
+  buildAndLoad(): MarzIndex;
+  /** Discard the staged documents, keeping the field configuration. */
+  clear(): void;
+  /** Release the WebAssembly memory held by the builder. */
+  free(): void;
+}
+
+/** The constructor behind {@link ClientBuilder}, with its static rehydrator. */
+type BuilderConstructor = {
+  new (
+    language: string,
+    refField?: string,
+    k1?: number,
+    b?: number,
+  ): ClientBuilder;
+  fromIndex(index: MarzIndex, refField?: string): ClientBuilder;
+};
+
+/**
+ * Resolve the builder constructor, initializing the module first.
+ *
+ * Separated out because both helpers below need the same two steps — ensure
+ * the module is instantiated, then find `MarzBuilder` in it — and the same
+ * failure: a search-only build has no such export, which means the page
+ * shipped the wrong `.wasm`, not that the caller passed a bad argument.
+ */
+async function builderConstructor(
+  wasmSource?: WasmSource,
+): Promise<BuilderConstructor> {
+  await initialize(wasmSource);
+  // Dynamic import rather than a static one: a static `import { MarzBuilder }`
+  // would fail to link against a search-only build that has no such export,
+  // breaking every search page to type the few that build client-side.
+  const pkg = (await import("../pkg/marz_wasm.js")) as unknown as {
+    MarzBuilder?: BuilderConstructor;
+  };
+  const Ctor = pkg.MarzBuilder;
+  if (!Ctor) {
+    throw new Error(
+      "marz: this WebAssembly build has no MarzBuilder " +
+        "(rebuild with scripts/build-wasm.sh --features builder)",
+    );
+  }
+  return Ctor;
+}
+
+/**
+ * Create a builder for `language`, for documents that only exist client-side.
+ *
+ * Async only to cover WASM initialization; after `initialize()` the work
+ * itself is synchronous. `refField` names the property holding each
+ * document's identity and defaults to `"id"`. `k1` and `b` are the BM25
+ * tuning parameters (defaults 1.2 and 0.75).
+ *
+ * ```ts
+ * const builder = await createBuilder("ja", "location");
+ * builder.field("title", 10.0);
+ * builder.field("text");
+ * builder.add({ location: "guide/intro", title: "入門", text: "…" });
+ * const index = builder.buildAndLoad();
+ * ```
+ */
+export async function createBuilder(
+  language: string,
+  refField?: string,
+  k1?: number,
+  b?: number,
+  wasmSource?: WasmSource,
+): Promise<ClientBuilder> {
+  const Ctor = await builderConstructor(wasmSource);
+  return new Ctor(language, refField, k1, b);
+}
+
+/**
+ * Rehydrate a builder from a loaded index for incremental updates.
+ *
+ * Restores the declared fields (names and boosts) and the language, so
+ * documents can be added or removed without re-adding the whole corpus. The
+ * reference field name is not stored in the index, so pass it again here when
+ * it is not `"id"`. `k1`/`b` come along with the index; there is nothing to
+ * set. Building clones the restored state and applies the staged documents on
+ * top, so building twice gives two equivalent indexes.
+ *
+ * ```ts
+ * const builder = await builderFromIndex(index, "location");
+ * builder.remove("guide/old");
+ * builder.add({ location: "guide/new", title: "…", text: "…" });
+ * const updated = builder.buildAndLoad();
+ * ```
+ */
+export async function builderFromIndex(
+  index: MarzIndex,
+  refField?: string,
+  wasmSource?: WasmSource,
+): Promise<ClientBuilder> {
+  const Ctor = await builderConstructor(wasmSource);
+  return Ctor.fromIndex(index, refField);
 }

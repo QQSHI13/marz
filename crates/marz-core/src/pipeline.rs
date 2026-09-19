@@ -4,6 +4,7 @@ use crate::language::LanguageRef;
 use crate::token::Token;
 
 /// A pipeline holds a list of functions applied to tokens.
+#[derive(Clone)]
 pub struct Pipeline {
     /// Language configuration used by the pipeline.
     ///

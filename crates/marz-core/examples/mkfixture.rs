@@ -28,7 +28,7 @@ fn main() {
         });
     }
     let idx = b.build();
-    let bytes = idx.to_binary(true);
+    let bytes = idx.to_binary(true).unwrap();
     std::fs::write(output, &bytes).unwrap();
     eprintln!(
         "{} docs, {} terms, {} bytes",

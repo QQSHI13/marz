@@ -407,9 +407,19 @@ pub fn cjk_trim(token: &mut Token) -> bool {
         if token.term.chars().all(is_combining_mark) {
             return false;
         }
-        // A lone prolonged mark is punctuation, not a syllable.
-        if token.term == "\u{30FC}" {
+        // Prolonged-mark runs are punctuation, not syllables: a run of `ー`
+        // lengthens nothing and must not be indexed. (An equality check here
+        // let `"ーー"` through as a term.)
+        if token.term.chars().all(|c| c == '\u{30FC}') {
             return false;
+        }
+        // A term starting with a combining or kana-voicing mark begins
+        // mid-cluster — malformed text, not a linguistic unit. (`ー` stays
+        // its own cluster deliberately, so only marks are rejected here.)
+        if let Some(first) = token.term.chars().next() {
+            if is_combining_mark(first) || is_kana_voicing_mark(first) {
+                return false;
+            }
         }
         return true;
     }
@@ -606,5 +616,37 @@ mod tests {
         let mut t = Token::new("(rust)");
         assert!(cjk_trim(&mut t));
         assert_eq!(t.term, "rust");
+    }
+
+    #[test]
+    fn trim_drops_prolonged_mark_runs() {
+        // `ー` lengthens a previous mora; a run of them lengthens nothing and
+        // is punctuation, not a term. The lone mark was already dropped — the
+        // runs leaked into the index.
+        for term in ["\u{30FC}", "\u{30FC}\u{30FC}", "\u{30FC}\u{30FC}\u{30FC}"] {
+            let mut token = Token::new(term);
+            assert!(!cjk_trim(&mut token), "{term:?} must not be indexed");
+        }
+        // A mark lengthening a real mora stays.
+        let mut word = Token::new("ラーメン");
+        assert!(cjk_trim(&mut word));
+        assert_eq!(word.term, "ラーメン");
+    }
+
+    #[test]
+    fn trim_rejects_terms_starting_with_a_combining_mark() {
+        // Malformed leading marks: a run beginning mid-cluster (stray Thai
+        // vowel sign, lone kana-voicing remainder glued to a bigram). These
+        // are not linguistic units, so the trimmer drops them rather than
+        // indexing noise.
+        for term in ["\u{0E31}ก", "\u{3099}か", "\u{3099}", "\u{0E48}า"] {
+            let mut token = Token::new(term);
+            assert!(!cjk_trim(&mut token), "{term:?} must not be indexed");
+        }
+        // Controls: marks after a base are fine, as are plain n-gram terms.
+        for term in ["กิ", "検索", "ラーメン", "か\u{3099}き"] {
+            let mut token = Token::new(term);
+            assert!(cjk_trim(&mut token), "{term:?} must survive trimming");
+        }
     }
 }

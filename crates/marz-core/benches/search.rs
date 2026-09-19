@@ -254,7 +254,7 @@ fn bench_load(c: &mut Criterion) {
         // `from_binary` materializes the postings into the same structures
         // a fresh build holds, so this measures parsing without any text
         // format cost — the convenience path, and still O(index size).
-        let binary = index.to_binary(true);
+        let binary = index.to_binary(true).unwrap();
         group.bench_with_input(
             BenchmarkId::new("binary/materialize", size),
             &binary,
@@ -266,7 +266,7 @@ fn bench_load(c: &mut Criterion) {
         // Without positions. Fewer bytes to walk, though the saving is smaller
         // than the byte count suggests: the position data is contiguous, so
         // skipping it avoids reads rather than allocations.
-        let lean = index.to_binary(false);
+        let lean = index.to_binary(false).unwrap();
         group.bench_with_input(
             BenchmarkId::new("binary/materialize-no-positions", size),
             &lean,
@@ -294,7 +294,7 @@ fn bench_load(c: &mut Criterion) {
     // Paired with `open` above, these two are the whole cost of answering from a
     // mapped index without materializing it.
     let index = build_index(&english_docs(5_000), Arc::new(English));
-    let bytes = index.to_binary(true);
+    let bytes = index.to_binary(true).unwrap();
     group.throughput(Throughput::Elements(1));
     group.bench_function("binary/term-lookup", |b| {
         let binary = marz_core::BinaryIndex::open(&bytes).unwrap();
@@ -307,7 +307,7 @@ fn bench_load(c: &mut Criterion) {
     // CJK indexes are the ones large enough for load time to be noticeable, so
     // measure the format on the corpus it was sized for.
     let ja = build_index(&japanese_docs(5_000), Arc::new(Japanese));
-    let ja_bytes = ja.to_binary(true);
+    let ja_bytes = ja.to_binary(true).unwrap();
     group.throughput(Throughput::Elements(5_000));
     group.bench_function("binary/materialize-ja-5000", |b| {
         b.iter(|| Index::from_binary(black_box(&ja_bytes), Arc::new(Japanese)).unwrap());

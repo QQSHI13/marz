@@ -147,6 +147,7 @@ pub(crate) mod varint;
 pub(crate) mod writer;
 
 pub use reader::BinaryIndex;
+pub use writer::WriteError;
 
 /// File magic identifying a Marz binary index.
 pub const MAGIC: [u8; 4] = *b"MARZ";

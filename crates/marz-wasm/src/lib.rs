@@ -195,6 +195,11 @@ pub fn tokenize(text: &str, language: &str) -> Result<Vec<String>, JsValue> {
 /// `language` selects the lowercasing rules and must be the index's language:
 /// Turkish (`"tr"`) folds `I` to `ı`. Omit it for anything else.
 ///
+/// A multi-language code containing Turkish folds the default way instead —
+/// no single folding serves both members, so dotted-capital-I offsets in
+/// Turkish text may shift by a character; search itself is unaffected (each
+/// member folds its own way at query time).
+///
 /// A caller highlighting a match must normalize the field text first. That is
 /// what `highlight()` in the JavaScript wrapper does.
 #[wasm_bindgen(js_name = "normalize")]
@@ -301,6 +306,8 @@ impl MarzIndex {
     ///
     /// Query syntax: bare terms, `+required`, `-prohibited`, `field:term`,
     /// `term*` wildcards, `term~N` fuzzy matching and `term^N` boosts.
+    /// A `*` wildcard wins over `~N`: `foo*~1` runs the wildcard search and
+    /// ignores the edit distance.
     ///
     /// `limit` caps how many hits are converted to JavaScript objects. Scoring
     /// happens for the whole corpus either way — the cap saves building position
@@ -405,6 +412,15 @@ impl MarzIndex {
     #[cfg(feature = "builder")]
     pub(crate) fn from_parts(index: Index, language: String) -> Self {
         MarzIndex { index, language }
+    }
+
+    /// Clone the core index and its stored language. Not exposed to JavaScript.
+    ///
+    /// Lets the optional builder rehydrate without moving out of a borrowed
+    /// index.
+    #[cfg(feature = "builder")]
+    pub(crate) fn clone_parts(&self) -> (Index, String) {
+        (self.index.clone(), self.language.clone())
     }
 }
 

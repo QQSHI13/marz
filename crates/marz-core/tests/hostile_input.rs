@@ -352,7 +352,7 @@ fn corrupting_any_single_byte_never_reads_out_of_bounds() {
     // thousands of loads. The step is coprime with the 64-byte header so the walk
     // does not land on the same field alignment every time.
     let index = corruptible_index();
-    let original = index.to_binary(true);
+    let original = index.to_binary(true).unwrap();
 
     let mut accepted = 0usize;
     let mut searched = 0usize;
@@ -396,7 +396,7 @@ fn corrupting_the_header_is_detected_rather_than_trusted() {
     // survive a search; silently answering from a misparsed header would mean
     // returning results computed from arbitrary bytes.
     let index = corruptible_index();
-    let original = index.to_binary(true);
+    let original = index.to_binary(true).unwrap();
 
     let mut rejected = 0usize;
     for offset in 0..64.min(original.len()) {
@@ -450,7 +450,7 @@ fn a_valid_header_with_a_garbage_body_fails_cleanly() {
     // parsing, and everything after is wrong. This is what a partial write or a
     // truncated-then-padded transfer produces.
     let index = english_index();
-    let original = index.to_binary(true);
+    let original = index.to_binary(true).unwrap();
     assert!(original.len() > 64, "index must be larger than its header");
 
     let mut bytes = original.clone();

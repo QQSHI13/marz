@@ -166,6 +166,13 @@ pub(crate) fn unescape_term(term: &str) -> String {
     out
 }
 
+/// Maximum magnitude of a clause boost.
+///
+/// A huge finite boost (e.g. `term^1e308`, which the parser accepts) overflows
+/// every score it touches to infinity, and infinities sort arbitrarily. The
+/// cap is far above any deliberate weighting, so only absurd boosts change.
+pub const MAX_CLAUSE_BOOST: f64 = 1e6;
+
 /// A full search query.
 #[derive(Debug, Clone)]
 pub struct Query {
@@ -199,13 +206,17 @@ impl Query {
         // infinite query boost times a zero BM25 weight is NaN, which sorts
         // randomly. See `index.rs`.
         //
+        // Huge finite boosts clamp to `MAX_CLAUSE_BOOST`: `term^1e308` is
+        // finite, so it passes the parser, but unclamped it overflows every
+        // score it touches to infinity.
+        //
         // Note that zero is *kept*. lunr writes `clause.boost || 1`, which
         // silently rewrites an explicit `term^0` into `term^1` — the exact
         // opposite of what the user asked for. `Clause::default()` already
         // supplies 1.0 when no boost is given, so there is nothing to default
         // here and an explicit 0 can be honoured.
         clause.boost = if clause.boost.is_finite() {
-            clause.boost.max(0.0)
+            clause.boost.clamp(0.0, MAX_CLAUSE_BOOST)
         } else {
             1.0
         };
@@ -342,5 +353,29 @@ mod tests {
         });
         assert!(!query.clauses[0].has_wildcard);
         assert!(query.clauses[0].use_pipeline);
+    }
+
+    #[test]
+    fn huge_finite_boost_clamps_instead_of_overflowing() {
+        // `1e308` is finite, so it passes the parser — but unclamped it turns
+        // every score it touches into infinity. Ordinary boosts pass through,
+        // and the existing floors are unchanged.
+        for (boost, expected) in [
+            (1e308, MAX_CLAUSE_BOOST),
+            (1e6, 1e6),
+            (2.5, 2.5),
+            (0.0, 0.0),
+            (-3.0, 0.0),
+            (f64::INFINITY, 1.0),
+            (f64::NAN, 1.0),
+        ] {
+            let mut query = Query::new(vec!["body".to_string()]);
+            query.clause(Clause {
+                term: "x".to_string(),
+                boost,
+                ..Clause::default()
+            });
+            assert_eq!(query.clauses[0].boost, expected, "boost {boost}");
+        }
     }
 }

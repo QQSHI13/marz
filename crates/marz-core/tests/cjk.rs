@@ -234,7 +234,7 @@ fn cjk_fixture_survives_a_binary_roundtrip() {
 
     for (code, cases) in &fixture.languages {
         let original = build(code, &cases.documents);
-        let bytes = original.to_binary(true);
+        let bytes = original.to_binary(true).unwrap();
         let loaded = Index::from_binary(&bytes, language_for(code))
             .unwrap_or_else(|e| panic!("[{code}] roundtrip failed: {e:?}"));
 
@@ -274,7 +274,7 @@ fn a_positions_free_index_still_answers_the_same_documents() {
 
     for (code, cases) in &fixture.languages {
         let full = build(code, &cases.documents);
-        let bytes = full.to_binary(false);
+        let bytes = full.to_binary(false).unwrap();
         let lean = Index::from_binary(&bytes, language_for(code)).unwrap();
 
         for case in &cases.cases {

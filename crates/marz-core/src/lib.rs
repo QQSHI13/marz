@@ -25,6 +25,7 @@ pub mod tokenizer;
 
 /// Re-export core types.
 pub use binary::BinaryIndex;
+pub use binary::WriteError;
 pub use index::{Index, IndexBuilder, MatchData, SearchResult};
 pub use language::{Language, MultiLanguage};
 pub use query::Query;

@@ -169,6 +169,14 @@ class TestBuilder:
         with pytest.raises(TypeError, match="must be a str or None"):
             builder.add({"id": "a", "body": value})
 
+    def test_a_lone_surrogate_field_raises_value_error_not_type_error(self):
+        # A real string that Rust cannot represent (lone surrogates are not
+        # valid UTF-8) is a value problem: only non-strings are TypeErrors.
+        builder = marz.IndexBuilder("en")
+        builder.field("body")
+        with pytest.raises(ValueError):
+            builder.add({"id": "a", "body": "bad \ud800 here"})
+
     def test_any_mapping_works_not_just_dict(self):
         class Mapping:
             def __getitem__(self, key):
@@ -218,6 +226,90 @@ class TestBuilder:
         assert builder.ref_field == "location"
         assert builder.fields == ["title", "text"]
         assert "staged=0" in repr(builder)
+
+
+class TestIncremental:
+    def test_from_index_restores_fields_and_language(self):
+        # The field list (and boosts) live in the index; rehydration must
+        # bring them back so later `add` calls read the same fields.
+        index = build()
+        builder = marz.IndexBuilder.from_index(index)
+        assert builder.language == "en"
+        assert builder.ref_field == "id"
+        assert builder.fields == ["title", "body"]
+        assert builder.staged == 0
+        rebuilt = builder.build()
+        assert rebuilt.document_count == 3
+        assert [h.ref for h in rebuilt.search("keyboard")] == ["c"]
+
+    def test_from_index_honours_a_custom_ref_field(self):
+        builder = marz.IndexBuilder("en", ref_field="location")
+        builder.field("body")
+        builder.add({"location": "a", "body": "hello world"})
+        index = builder.build()
+        patched = marz.IndexBuilder.from_index(index, ref_field="location")
+        assert patched.ref_field == "location"
+        patched.add({"location": "b", "body": "hello moon"})
+        rebuilt = patched.build()
+        assert rebuilt.document_count == 2
+        assert {h.ref for h in rebuilt.search("hello")} == {"a", "b"}
+
+    def test_from_index_rejects_an_empty_ref_field(self):
+        with pytest.raises(ValueError, match="ref_field must not be empty"):
+            marz.IndexBuilder.from_index(build(), ref_field="   ")
+
+    def test_remove_deletes_and_reports_presence(self):
+        builder = marz.IndexBuilder.from_index(build())
+        assert builder.remove("c") is True
+        # Unknown references are a no-op, not an error: bulk syncs diff
+        # against stale ids.
+        assert builder.remove("missing") is False
+        # Removing twice reports absence the second time.
+        assert builder.remove("c") is False
+        rebuilt = builder.build()
+        assert rebuilt.document_count == 2
+        assert rebuilt.search("keyboard") == []
+
+    def test_remove_on_a_fresh_builder_raises(self):
+        # A fresh builder holds nothing to remove from; returning False would
+        # silently pretend a deletion happened.
+        builder = marz.IndexBuilder("en")
+        builder.field("body")
+        builder.add({"id": "a", "body": "hello"})
+        with pytest.raises(ValueError, match="from_index"):
+            builder.remove("a")
+
+    def test_a_staged_add_then_removed_stays_removed(self):
+        builder = marz.IndexBuilder.from_index(build())
+        builder.add({"id": "d", "title": "new", "body": "keyboard"})
+        assert builder.staged == 1
+        assert builder.remove("d") is True
+        rebuilt = builder.build()
+        assert rebuilt.document_count == 3
+        assert [h.ref for h in rebuilt.search("keyboard")] == ["c"]
+
+    def test_upsert_through_a_rehydrated_builder_replaces(self):
+        builder = marz.IndexBuilder.from_index(build())
+        builder.add({"id": "c", "title": "Keyboards", "body": "typing"})
+        rebuilt = builder.build()
+        assert rebuilt.document_count == 3
+        assert rebuilt.search("device") == []
+        assert [h.ref for h in rebuilt.search("typing")] == ["c"]
+
+    def test_fields_cannot_be_declared_twice_after_rehydration(self):
+        builder = marz.IndexBuilder.from_index(build())
+        with pytest.raises(ValueError, match="already declared"):
+            builder.field("title")
+
+    def test_building_twice_gives_two_equivalent_indexes(self):
+        # Removals live in the restored state, staged docs on top: neither
+        # build may consume the other.
+        builder = marz.IndexBuilder.from_index(build())
+        assert builder.remove("c") is True
+        first = builder.build()
+        second = builder.build()
+        assert first.document_count == second.document_count == 2
+        assert first.search("keyboard") == second.search("keyboard") == []
 
 
 class TestSearch:

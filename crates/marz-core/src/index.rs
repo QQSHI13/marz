@@ -232,6 +232,7 @@ struct Stats {
 /// millions. Staged documents are owned twice over (once staged, once
 /// indexed), and re-adding a reference scans every posting list, so bulk
 /// loads should prefer fresh references over upserts.
+#[derive(Clone)]
 pub struct IndexBuilder {
     language: LanguageRef,
     ref_field: String,
@@ -270,6 +271,18 @@ impl IndexBuilder {
     /// Return the configured document reference field.
     pub fn ref_field_name(&self) -> &str {
         &self.ref_field
+    }
+
+    /// Declared fields in declaration order, with their boosts.
+    ///
+    /// The bindings stage field names separately from the core builder, so a
+    /// rehydrated builder restores that list from here rather than losing the
+    /// boosts by re-declaring names alone.
+    pub fn declared_fields(&self) -> Vec<(String, f64)> {
+        self.fields
+            .iter()
+            .map(|f| (f.name.clone(), f.boost))
+            .collect()
     }
 
     /// Add a field to the index. `boost` defaults to `1.0`.
@@ -343,6 +356,57 @@ impl IndexBuilder {
         self
     }
 
+    /// Rehydrate a builder from a built [`Index`] for incremental updates.
+    ///
+    /// Moves the inverted index, field lengths, document boosts, document
+    /// count, field names/boosts and BM25 parameters back into a builder, so a
+    /// caller can [`remove`](Self::remove) or re-[`add`](Self::add) documents
+    /// and [`build`](Self::build) again without re-adding the whole corpus.
+    /// The on-disk format is never patched in place: rebuild and rewrite the
+    /// bytes instead (see [`Index::to_binary`]).
+    ///
+    /// The document reference field name is not stored in the index, so the
+    /// builder resets to `"id"`: call [`ref_field`](Self::ref_field) afterwards
+    /// if the corpus uses another name. Averages are re-derived on `build`,
+    /// so scoring is unchanged.
+    pub fn from_index(index: Index) -> Self {
+        let language = index.pipeline.language();
+        let Index {
+            inverted_index,
+            token_set: _,
+            fields,
+            stats,
+            pipeline: _,
+        } = index;
+        let Stats {
+            document_count,
+            field_lengths,
+            average_field_lengths: _,
+            field_boosts,
+            doc_boosts,
+            k1,
+            b,
+        } = stats;
+        let field_configs = fields
+            .into_iter()
+            .map(|name| {
+                let boost = field_boosts.get(&name).copied().unwrap_or(1.0);
+                FieldConfig { name, boost }
+            })
+            .collect();
+        Self {
+            language,
+            ref_field: "id".to_string(),
+            fields: field_configs,
+            field_lengths,
+            inverted_index,
+            document_count,
+            doc_boosts,
+            k1,
+            b,
+        }
+    }
+
     /// Add a document to the index.
     ///
     /// `field_getter` receives a field name and should return the raw text for
@@ -357,7 +421,7 @@ impl IndexBuilder {
         F: FnMut(&str) -> Option<String>,
     {
         let doc_ref = doc_ref.into();
-        debug_assert!(
+        assert!(
             !doc_ref.is_empty(),
             "empty document references are rejected at the binding boundary"
         );
@@ -417,6 +481,22 @@ impl IndexBuilder {
         }
         self.inverted_index.retain(|_, p| !p.fields.is_empty());
         self.field_lengths.remove(doc_ref);
+    }
+
+    /// Remove the document `doc_ref` from the index.
+    ///
+    /// Returns `true` when a document was present and removed, `false` when no
+    /// document used that reference. Removing an unknown reference is a no-op.
+    /// This is the public form of the upsert helper: [`add`](Self::add) on an
+    /// existing reference replaces it, while this deletes it outright and
+    /// decrements the document count.
+    pub fn remove(&mut self, doc_ref: &str) -> bool {
+        if self.doc_boosts.remove(doc_ref).is_none() {
+            return false;
+        }
+        self.remove_doc(doc_ref);
+        self.document_count = self.document_count.saturating_sub(1);
+        true
     }
 
     /// Consume the builder and produce a searchable [`Index`].
@@ -488,6 +568,7 @@ impl IndexBuilder {
 }
 
 /// Built search index.
+#[derive(Clone)]
 pub struct Index {
     inverted_index: BTreeMap<String, Posting>,
     token_set: TokenSet,
@@ -990,7 +1071,11 @@ impl Index {
     /// Roughly a fifth of the equivalent lunr-style JSON. Pass
     /// `include_positions = false` to drop highlighting and CJK phrase
     /// verification data for a further saving of about a tenth.
-    pub fn to_binary(&self, include_positions: bool) -> Vec<u8> {
+    ///
+    /// Fails with [`WriteError::TooLarge`](crate::binary::WriteError) when a
+    /// count or offset does not fit the `u32`-addressed format — a huge index,
+    /// never a small one.
+    pub fn to_binary(&self, include_positions: bool) -> Result<Vec<u8>, crate::binary::WriteError> {
         crate::binary::writer::write_index(&crate::binary::writer::IndexSnapshot {
             language: self.pipeline.language().code(),
             fields: &self.fields,
@@ -1119,8 +1204,8 @@ impl Index {
             field_lengths,
             field_boosts,
             doc_boosts,
-            k1: binary.k1(),
-            b: binary.b(),
+            k1: sanitize_k1(binary.k1()),
+            b: sanitize_b(binary.b()),
         };
 
         let token_set = TokenSet::from_strs(inverted_index.keys().map(String::as_str));
@@ -1148,6 +1233,32 @@ impl Index {
     pub fn term_count(&self) -> usize {
         self.inverted_index.len()
     }
+
+    /// Return the language this index was built with.
+    pub fn language(&self) -> LanguageRef {
+        self.pipeline.language()
+    }
+
+    /// Return the BM25 `k1` parameter.
+    pub fn k1(&self) -> f64 {
+        self.stats.k1
+    }
+
+    /// Return the BM25 `b` parameter.
+    pub fn b(&self) -> f64 {
+        self.stats.b
+    }
+
+    /// Return the boost configured for `field` (`1.0` when unknown).
+    pub fn field_boost(&self, field: &str) -> f64 {
+        self.stats.field_boosts.get(field).copied().unwrap_or(1.0)
+    }
+
+    /// Whether a document reference is present in the index.
+    pub fn contains(&self, doc_ref: &str) -> bool {
+        self.stats.doc_boosts.contains_key(doc_ref)
+            || self.stats.field_lengths.contains_key(doc_ref)
+    }
 }
 
 /// Whether a document satisfies the accumulated set of required clauses.
@@ -1172,6 +1283,29 @@ fn sanitize_boost(boost: f64) -> f64 {
         boost.max(0.0)
     } else {
         1.0
+    }
+}
+
+/// Clamp `k1` read from untrusted bytes to the builder's contract.
+///
+/// Mirrors `IndexBuilder::k1`: non-finite or negative values keep `1.2`.
+fn sanitize_k1(k1: f64) -> f64 {
+    if k1.is_finite() && k1 >= 0.0 {
+        k1
+    } else {
+        1.2
+    }
+}
+
+/// Clamp `b` read from untrusted bytes to the builder's contract.
+///
+/// Mirrors `IndexBuilder::b`: non-finite values keep `0.75`, finite ones
+/// clamp to `[0, 1]`.
+fn sanitize_b(b: f64) -> f64 {
+    if b.is_finite() {
+        b.clamp(0.0, 1.0)
+    } else {
+        0.75
     }
 }
 
@@ -1430,6 +1564,35 @@ mod tests {
     }
 
     #[test]
+    fn huge_boost_scores_finite() {
+        // `^1e308` is finite, so the parser accepts it — but an unclamped
+        // clause boost overflows every score it touches to infinity, which
+        // sorts arbitrarily. The clamp keeps scores finite.
+        let index = test_index();
+        let results = index.search("green^1e308").unwrap();
+        assert!(!results.is_empty());
+        assert!(
+            results.iter().all(|r| r.score.is_finite()),
+            "scores must stay finite: {:?}",
+            results.iter().map(|r| r.score).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn from_binary_sanitizes_k1_and_b() {
+        // Forged BM25 parameters must load as the builder's clamps, not
+        // verbatim: NaN `k1` or an out-of-range `b` would corrupt scoring.
+        // `k1` lives at header bytes 24..32, `b` at 32..40.
+        let bytes = test_index().to_binary(true).unwrap();
+        let mut bad_k1 = bytes.clone();
+        bad_k1[24..32].copy_from_slice(&f64::NAN.to_le_bytes());
+        assert_eq!(Index::from_binary(&bad_k1, en()).unwrap().k1(), 1.2);
+        let mut bad_b = bytes.clone();
+        bad_b[32..40].copy_from_slice(&5.0f64.to_le_bytes());
+        assert_eq!(Index::from_binary(&bad_b, en()).unwrap().b(), 1.0);
+    }
+
+    #[test]
     fn duplicate_doc_ref_replaces_instead_of_merging() {
         // Upsert: re-adding a ref drops its old postings and leaves N alone.
         // Merging would double `tf` while overwriting field lengths.
@@ -1441,6 +1604,55 @@ mod tests {
         assert_eq!(index.document_count(), 1);
         assert!(index.search("green").unwrap().is_empty());
         assert_eq!(index.search("plumb").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn from_index_patches_without_full_rebuild() {
+        // Incremental path: serialize, reload, rehydrate a builder, remove one
+        // document and upsert another, then rebuild. The on-disk bytes are
+        // never patched in place — the builder re-indexes only what changed.
+        let mut builder = IndexBuilder::new(en());
+        builder
+            .ref_field("id")
+            .field("title", 1.0)
+            .field("body", 1.0);
+        builder.add("a", 1.0, |name| match name {
+            "title" => Some("green apples".to_string()),
+            "body" => Some("green orchard".to_string()),
+            _ => None,
+        });
+        builder.add("b", 1.0, |name| match name {
+            "title" => Some("plumb pipes".to_string()),
+            "body" => Some("lead pipes".to_string()),
+            _ => None,
+        });
+        let bytes = builder.build().to_binary(true).unwrap();
+
+        let loaded = Index::from_binary(&bytes, en()).expect("roundtrip fixture");
+        assert_eq!(loaded.document_count(), 2);
+        let mut patched = IndexBuilder::from_index(loaded);
+        assert!(patched.remove("a"));
+        assert!(!patched.remove("missing"));
+        assert!(!patched.remove("a"));
+        patched.add("c", 1.0, |name| match name {
+            "title" => Some("green keyboard".to_string()),
+            "body" => Some("typing".to_string()),
+            _ => None,
+        });
+        // Upsert through the rehydrated builder replaces without growing N.
+        patched.add("b", 1.0, |name| match name {
+            "title" => Some("brass keyboard".to_string()),
+            "body" => Some("typing".to_string()),
+            _ => None,
+        });
+        let index = patched.build();
+        assert_eq!(index.document_count(), 2);
+        assert!(index.search("orchard").unwrap().is_empty());
+        assert!(index.search("plumb").unwrap().is_empty());
+        let hits = index.search("keyboard").unwrap();
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().any(|h| h.ref_id == "b"));
+        assert!(hits.iter().any(|h| h.ref_id == "c"));
     }
 
     #[test]
@@ -1498,7 +1710,7 @@ mod tests {
         let mut builder = IndexBuilder::new(stemmed);
         builder.ref_field("id").field("body", 1.0);
         builder.add("d", 1.0, |_| Some("suchmaschinen".to_string()));
-        let bytes = builder.build().to_binary(true);
+        let bytes = builder.build().to_binary(true).unwrap();
 
         let unstemmed: LanguageRef = std::sync::Arc::new(Generic::new("de"));
         assert!(matches!(

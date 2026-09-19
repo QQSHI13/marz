@@ -17,13 +17,14 @@ use std::collections::{HashMap, HashSet};
 /// or pointers: the trie is built by mutation (`insert` pushes nodes) and read
 /// by iterative walks carrying indices on explicit stacks. Nothing aliases,
 /// so there is no `unsafe` anywhere in this module.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Node {
     final_: bool,
     edges: HashMap<char, usize>,
 }
 
 /// A set of tokens represented as a trie, used to expand wildcard terms.
+#[derive(Clone)]
 pub struct TokenSet {
     /// Arena of trie nodes; index `0` is always the root.
     nodes: Vec<Node>,

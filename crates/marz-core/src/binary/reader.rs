@@ -49,6 +49,15 @@ fn validate_field_name(name: &str) -> Result<(), ()> {
     Ok(())
 }
 
+/// Maximum token length accepted from the positions section, in characters.
+///
+/// Lengths are character counts of indexed tokens; real ones are a handful of
+/// characters (every CJK bigram is 2). Anything above this is corrupt bytes,
+/// not a token — and pushing an unbounded varint into results would hand
+/// callers a garbage span. One mebibyte of characters needs a larger document,
+/// which a `u32`-addressed file cannot hold next to its own index data.
+const MAX_POSITION_LENGTH: usize = 1 << 20;
+
 /// One document's entry in a term's posting list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PostingEntry {
@@ -781,6 +790,14 @@ impl<'a> BinaryIndex<'a> {
         // huge allocation rather than error.
         let mut cursor = Cursor::new(slice, "positions");
         let uniform_length = cursor.read_usize()?;
+        // A length no real token has: the writer stores character counts of
+        // indexed tokens, so an unbounded varint here is corrupt bytes. It
+        // must error rather than be pushed into results as a garbage span.
+        if uniform_length > MAX_POSITION_LENGTH {
+            return Err(FormatError::Truncated {
+                section: "positions",
+            });
+        }
         let per_position = if uniform_length == 0 { 2 } else { 1 };
         let over_budget = match (entry.position_count as usize).checked_mul(per_position) {
             Some(need) => need > slice.len(),
@@ -801,7 +818,14 @@ impl<'a> BinaryIndex<'a> {
                     section: "positions",
                 })?;
             let length = if uniform_length == 0 {
-                cursor.read_usize()?
+                // Same bound as above, for the interleaved lengths.
+                let length = cursor.read_usize()?;
+                if length > MAX_POSITION_LENGTH {
+                    return Err(FormatError::Truncated {
+                        section: "positions",
+                    });
+                }
+                length
             } else {
                 uniform_length
             };
@@ -913,7 +937,7 @@ mod tests {
     #[test]
     fn header_and_metadata_survive_a_roundtrip() {
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
 
         assert_eq!(index.language(), "ja");
@@ -932,7 +956,7 @@ mod tests {
     #[test]
     fn document_references_roundtrip_including_slashes() {
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
 
         // Sorted order, and a docref full of slashes must come back intact —
@@ -955,7 +979,7 @@ mod tests {
     #[test]
     fn boosts_and_field_lengths_roundtrip() {
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
 
         for id in 0..3u32 {
@@ -976,7 +1000,7 @@ mod tests {
     #[test]
     fn every_term_roundtrips_across_block_boundaries() {
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
 
         let expected: Vec<String> = fixture.inverted_index.keys().cloned().collect();
@@ -994,7 +1018,7 @@ mod tests {
     #[test]
     fn term_lookup_rejects_absent_terms() {
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
 
         // Before the first term, after the last, and in a gap between two.
@@ -1007,7 +1031,7 @@ mod tests {
     #[test]
     fn postings_and_positions_roundtrip() {
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
 
         for (term_id, (term, posting)) in fixture.inverted_index.iter().enumerate() {
@@ -1041,7 +1065,7 @@ mod tests {
         // Delta decoding depends on it, and a searcher can binary search only if
         // it holds.
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
 
         for term_id in 0..index.term_count() as u32 {
@@ -1064,7 +1088,7 @@ mod tests {
         let fixture = fixture();
         let mut snapshot = fixture.snapshot();
         snapshot.include_positions = false;
-        let bytes = write_index(&snapshot);
+        let bytes = write_index(&snapshot).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
 
         assert!(!index.header().has_positions());
@@ -1095,7 +1119,7 @@ mod tests {
             b: 0.75,
             include_positions: true,
         };
-        let bytes = write_index(&snapshot);
+        let bytes = write_index(&snapshot).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
 
         assert_eq!(index.term_count(), 0);
@@ -1120,7 +1144,7 @@ mod tests {
     #[test]
     fn open_rejects_bad_magic_and_version() {
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
 
         let mut wrong_magic = bytes.clone();
         wrong_magic[0] = b'J';
@@ -1140,7 +1164,7 @@ mod tests {
     #[test]
     fn open_rejects_offsets_outside_the_buffer() {
         let fixture = fixture();
-        let mut bytes = write_index(&fixture.snapshot());
+        let mut bytes = write_index(&fixture.snapshot()).unwrap();
         // Push end_offset past the real length.
         let bogus = (bytes.len() as u32 + 4096).to_le_bytes();
         bytes[60..64].copy_from_slice(&bogus);
@@ -1153,7 +1177,7 @@ mod tests {
     #[test]
     fn open_rejects_sections_out_of_order() {
         let fixture = fixture();
-        let mut bytes = write_index(&fixture.snapshot());
+        let mut bytes = write_index(&fixture.snapshot()).unwrap();
         // Point docs_offset before meta_offset.
         bytes[44..48].copy_from_slice(&0u32.to_le_bytes());
         assert!(matches!(
@@ -1184,7 +1208,7 @@ mod tests {
         // and the first field_id are single-byte varints in this fixture, so
         // entry_count sits at postings base + 4.
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
         let base = index.header().postings_offset as usize;
 
@@ -1218,12 +1242,104 @@ mod tests {
         // count no buffer could hold. Must error, not attempt a 64 GB
         // allocation.
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
         let index = BinaryIndex::open(&bytes).unwrap();
         let postings = index.postings(0).unwrap();
         let entry = postings.fields[0].entries[0];
         let forged = PostingEntry {
             position_count: u32::MAX,
+            ..entry
+        };
+        assert!(index.positions(&forged).is_err());
+    }
+
+    /// Splice a wide varint over one byte of a valid file, keeping the header
+    /// consistent (positions is the last section, so only `end_offset` moves).
+    fn corrupt_positions_byte(bytes: &[u8], absolute: usize, value: u64) -> Vec<u8> {
+        let mut corrupt = bytes.to_vec();
+        let wide = encode_varint(value);
+        corrupt.splice(absolute..absolute + 1, wide);
+        let new_end = corrupt.len() as u32;
+        corrupt[60..64].copy_from_slice(&new_end.to_le_bytes());
+        corrupt
+    }
+
+    #[test]
+    fn absurd_uniform_position_length_is_rejected() {
+        // A corrupt uniform length (every position inherits it) must error,
+        // not be pushed into results as a garbage span. The count check above
+        // cannot catch it: one position in a large section is within budget.
+        let fixture = fixture();
+        let bytes = write_index(&fixture.snapshot()).unwrap();
+        let index = BinaryIndex::open(&bytes).unwrap();
+        let postings = index.postings(0).unwrap();
+        let entry = postings.fields[0].entries[0];
+        assert!(index.positions(&entry).is_ok());
+
+        let absolute = index.header().positions_offset as usize + entry.positions_offset as usize;
+        let corrupt = corrupt_positions_byte(&bytes, absolute, 1u64 << 40);
+        let index = BinaryIndex::open(&corrupt).unwrap();
+        let forged = PostingEntry {
+            positions_offset: entry.positions_offset,
+            position_count: entry.position_count,
+            ..entry
+        };
+        assert!(index.positions(&forged).is_err());
+    }
+
+    #[test]
+    fn absurd_varying_position_length_is_rejected() {
+        // Same, for the interleaved lengths of a varying-length block: a
+        // block of `[(0, 3), (5, 7)]` encodes as sentinel + (delta, length)
+        // pairs, so the first length sits two bytes into the entry's block.
+        let fields = vec!["body".to_string()];
+        let field_boosts = HashMap::new();
+        let doc_boosts = [("a".to_string(), 1.0)].into_iter().collect();
+        let field_lengths: HashMap<String, HashMap<String, usize>> = [(
+            "a".to_string(),
+            [("body".to_string(), 2)].into_iter().collect(),
+        )]
+        .into_iter()
+        .collect();
+        let mut posting = Posting::default();
+        posting
+            .fields
+            .entry("body".to_string())
+            .or_default()
+            .insert(
+                "a".to_string(),
+                PostingDoc {
+                    term_frequency: 2,
+                    positions: vec![(0, 3), (5, 7)],
+                },
+            );
+        let inverted_index = [(String::from("mixed"), posting)].into_iter().collect();
+        let snapshot = IndexSnapshot {
+            language: "en",
+            fields: &fields,
+            field_boosts: &field_boosts,
+            pipeline: Vec::new(),
+            document_count: 1,
+            doc_boosts: &doc_boosts,
+            field_lengths: &field_lengths,
+            inverted_index: &inverted_index,
+            k1: 1.2,
+            b: 0.75,
+            include_positions: true,
+        };
+        let bytes = write_index(&snapshot).unwrap();
+        let index = BinaryIndex::open(&bytes).unwrap();
+        let postings = index.postings(0).unwrap();
+        let entry = postings.fields[0].entries[0];
+        assert_eq!(index.positions(&entry).unwrap(), vec![(0, 3), (5, 7)]);
+
+        let absolute =
+            index.header().positions_offset as usize + entry.positions_offset as usize + 2;
+        let corrupt = corrupt_positions_byte(&bytes, absolute, 1u64 << 40);
+        let index = BinaryIndex::open(&corrupt).unwrap();
+        let forged = PostingEntry {
+            positions_offset: entry.positions_offset,
+            position_count: entry.position_count,
             ..entry
         };
         assert!(index.positions(&forged).is_err());
@@ -1235,7 +1351,7 @@ mod tests {
         // either opens and reads, or errors. Nothing panics, nothing reads out
         // of bounds.
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
 
         for length in 0..bytes.len() {
             let truncated = &bytes[..length];
@@ -1269,7 +1385,7 @@ mod tests {
         // Bit-rot and hostile input both look like this. Every accessor must
         // return a result rather than unwinding.
         let fixture = fixture();
-        let bytes = write_index(&fixture.snapshot());
+        let bytes = write_index(&fixture.snapshot()).unwrap();
 
         // Every 7th byte, so the test stays fast while still hitting each
         // section including the header.
