@@ -35,4 +35,4 @@ marz-core = { workspace = true, features = ["all-languages"] }
 # accessors like PyList_GET_ITEM become real function calls. Nothing here is in
 # a hot loop: the work happens inside marz-core on Rust data, and the boundary
 # is crossed once per document at build time and once per query at search time.
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310"] }
