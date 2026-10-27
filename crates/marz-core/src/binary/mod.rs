@@ -269,6 +269,14 @@ pub enum FormatError {
         /// Raw flag bits found in the file.
         flags: u16,
     },
+    /// A header value contradicts the rest of the file.
+    ///
+    /// The writer maintains invariants the reader relies on: `document_count`
+    /// equals `doc_count`, `k1` and `b` are finite and in range, and the
+    /// document, dictionary, postings and position tables are laid out
+    /// contiguously. A value that breaks them means corrupt or forged bytes,
+    /// not a legacy format.
+    InvalidHeader,
 }
 
 impl std::fmt::Display for FormatError {
@@ -323,6 +331,11 @@ impl std::fmt::Display for FormatError {
             Self::InvalidFlags { flags } => {
                 write!(f, "index has unsupported flag bits {flags:#06x}")
             }
+            Self::InvalidHeader => write!(
+                f,
+                "index header contradicts its contents (document count, BM25 \
+                 parameters or section tables)"
+            ),
         }
     }
 }

@@ -11,6 +11,17 @@
 
 use std::collections::{HashMap, HashSet};
 
+/// Most edits a fuzzy query may use, regardless of what `~N` asked for.
+///
+/// The budget also cannot reach the term's length (see
+/// [`TokenSet::expand_fuzzy`]), but that clamp alone still lets query length set
+/// the workload: a pasted 142-character term with `~142` cost 35 s against a
+/// 5,000-term trie, because the edit matrix grows with the pattern and almost
+/// nothing prunes. Two edits is as much fuzziness as a search box means —
+/// transpositions and single typos — so the ceiling is a constant rather than a
+/// function of input length.
+pub const MAX_FUZZY_EDITS: usize = 2;
+
 /// A node in the token trie, addressed by arena index.
 ///
 /// Nodes live in `TokenSet::nodes` and edges store indices, never references
@@ -99,6 +110,12 @@ impl TokenSet {
             results: Vec::new(),
         };
         walk.run(&self.nodes);
+        // Canonical order, not trie-edge order: `Node::edges` is a `HashMap`, so
+        // expansion order varies between processes. Scoring sums float
+        // contributions in expansion order, so unsorted results made wildcard
+        // scores differ by a few ULPs across reloads of identical bytes —
+        // enough to flip a near-tied ranking.
+        walk.results.sort_unstable();
         walk.results
     }
 
@@ -164,14 +181,25 @@ impl TokenSet {
     /// word-length terms where fuzzy matching is useful — `keyboard~2` is
     /// unaffected — and turns `検索~2` back into `検索~1`, which is as much
     /// fuzziness as a two-character term can carry and still mean anything.
+    ///
+    /// # The budget is also capped at [`MAX_FUZZY_EDITS`]
+    ///
+    /// The length clamp is not enough on its own: it still lets a long query
+    /// choose a huge budget, and the edit matrix is `O(pattern)` wide, so
+    /// `~142` on a 142-character term took 35 s. Fuzziness beyond two edits is
+    /// not something a searcher means, so the ceiling is a constant. Both direct
+    /// callers and parsed `~N` queries get the same bound.
     pub fn expand_fuzzy(&self, term: &str, max_edits: usize) -> Vec<String> {
         // Unescape first: a literal `*` is an ordinary matrix character here,
         // not a pattern operator (the walk below has no wildcard branch).
         let term = crate::query::unescape_term(term);
         let pattern: Vec<char> = term.chars().collect();
 
-        // At least one character of the query must survive; see above.
-        let max_edits = max_edits.min(pattern.len().saturating_sub(1));
+        // At least one character of the query must survive; see above. Then the
+        // fixed ceiling that keeps a long pasted term from setting the workload.
+        let max_edits = max_edits
+            .min(MAX_FUZZY_EDITS)
+            .min(pattern.len().saturating_sub(1));
         if max_edits == 0 {
             return self.expand_exact(&term);
         }
@@ -186,6 +214,9 @@ impl TokenSet {
             results: Vec::new(),
         };
         walk.run(&self.nodes, &initial);
+        // Same canonical order as `expand`: fuzzy results feed the same scoring
+        // sum, so a `HashMap`-ordered walk would make scores unreproducible.
+        walk.results.sort_unstable();
         walk.results
     }
 }
@@ -645,17 +676,40 @@ mod tests {
     #[test]
     fn transposition_is_restricted_not_unbounded() {
         // Optimal string alignment forbids editing between a swapped pair, so
-        // "ca" -> "abc" is three edits. Unrestricted Damerau-Levenshtein would
-        // call it two, and accepting it at ~2 would mean the recurrence is
+        // "zzca" -> "zzabc" is three edits. Unrestricted Damerau-Levenshtein
+        // would call it two, and accepting it at ~2 would mean the recurrence is
         // reaching further back than the two-row window can justify.
         //
-        // Both strings carry a "zz" prefix only so the query is long enough that
-        // the length clamp allows a budget of three at all.
+        // The walk itself cannot be asked for three edits any more (see
+        // `MAX_FUZZY_EDITS`), so this pins the distance oracle and the clamp
+        // rather than the walk: the query is capped at two edits and therefore
+        // does not reach the string.
         assert_eq!(osa_distance("zzca", "zzabc"), 3);
         let mut set = TokenSet::new();
         set.insert("zzabc");
         assert!(set.expand_fuzzy("zzca", 2).is_empty());
-        assert_eq!(set.expand_fuzzy("zzca", 3), vec!["zzabc".to_string()]);
+        assert!(
+            set.expand_fuzzy("zzca", 3).is_empty(),
+            "the edit budget is capped, so ~3 behaves like ~2"
+        );
+    }
+
+    #[test]
+    fn the_edit_budget_is_capped_at_a_constant() {
+        // A pasted long term with `~99` used to set its own workload: the edit
+        // row is `O(pattern)` wide and hardly anything prunes, so a 142-character
+        // query took 35 s against a 5,000-term trie. The bound is now a constant
+        // independent of query length.
+        let mut set = TokenSet::new();
+        set.insert("keyboard");
+        // Three substitutions: reachable at ~3 as an request, but the cap keeps
+        // it out.
+        assert!(set.expand_fuzzy("kzzzboard", 3).is_empty());
+        // Two edits still work, which is all the cap allows.
+        assert_eq!(
+            set.expand_fuzzy("kzyboard", MAX_FUZZY_EDITS),
+            vec!["keyboard".to_string()]
+        );
     }
 
     /// Every string of length 1..=`max_len` over `alphabet`, sorted.
@@ -693,7 +747,9 @@ mod tests {
             "", "a", "ab", "ba", "abc", "acb", "bacd", "cba", "aabb", "abcab",
         ] {
             for budget in 1..=3 {
-                let effective = budget.min(query.chars().count().saturating_sub(1));
+                let effective = budget
+                    .min(MAX_FUZZY_EDITS)
+                    .min(query.chars().count().saturating_sub(1));
                 let mut actual = set.expand_fuzzy(query, budget);
                 actual.sort();
                 let mut expected: Vec<String> = terms

@@ -86,7 +86,13 @@ impl MultiLanguage {
         if piece.is_empty() {
             return;
         }
+        // Each member's output is collected before anything is emitted, so a
+        // whole-run ghost can be judged against the finer tokens another member
+        // produced for the same span. Judging per member as it went would mean
+        // the verdict depended on member order.
+        let mut per_member: Vec<Vec<Token>> = Vec::with_capacity(self.languages.len());
         for lang in &self.languages {
+            let mut mine = Vec::new();
             for mut token in lang.tokenize(piece) {
                 // Drop ghost mixed-script terms: e.g. the English side of an
                 // `en,ja` index emits `hello検索` whole for a piece the
@@ -101,9 +107,57 @@ impl MultiLanguage {
                         crate::token::TokenMetadata::Pair(start, len),
                     );
                 }
+                mine.push(token);
+            }
+            per_member.push(mine);
+        }
+
+        for (member, mine) in per_member.iter().enumerate() {
+            // Whether *this* member bigrams a given script decides whether its
+            // tokens for that script can be whole-run ghosts.
+            let member_bigrams = |term: &str| {
+                term.chars()
+                    .next()
+                    .is_some_and(|c| self.languages[member].is_ngram_script(c))
+            };
+            for token in mine {
+                // A *word*-tokenizing member emits a whole CJK run as one term
+                // (`エンジン`), while a bigramming member splits it (`エン`,
+                // `ンジ`, `ジン`). The whole run is a ghost: no query produces
+                // it (the query lexer bigrams too), yet it counts toward the
+                // field length and inflates BM25 — on a one-document `en,ja`
+                // index it scored the same query 2.304 instead of 2.016.
+                //
+                // Only tokens from a member that does *not* bigram this script
+                // can be ghosts: for a bigramming member these spans *are* its
+                // output, so dropping them would delete real terms.
+                if !member_bigrams(&token.term) {
+                    let covering: Vec<(usize, usize)> = per_member
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != member)
+                        .flat_map(|(other, tokens)| {
+                            tokens.iter().filter_map(move |t| {
+                                let (start, len) = t.position()?;
+                                // Only a bigramming member's tokens can tile a
+                                // whole run; a sibling word-tokenizer's identical
+                                // whole run would otherwise count as cover.
+                                let other_bigrams = t
+                                    .term
+                                    .chars()
+                                    .next()
+                                    .is_some_and(|c| self.languages[other].is_ngram_script(c));
+                                other_bigrams.then_some((start, start + len))
+                            })
+                        })
+                        .collect();
+                    if is_ghost_whole_run(token, &covering) {
+                        continue;
+                    }
+                }
                 let key = (token.term.clone(), token.position());
                 if seen.insert(key) {
-                    tokens.push(token);
+                    tokens.push(token.clone());
                 }
             }
         }
@@ -141,6 +195,47 @@ impl MultiLanguage {
             separators,
         }
     }
+}
+
+/// Whether a whole-run token is a ghost that finer tokens exactly cover.
+///
+/// `covering` holds the spans, in the same coordinate space, of tokens another
+/// member produced inside the candidate's span. The candidate is a ghost when two
+/// or more of them tile it exactly — no gaps, no overhang — because that is the
+/// signature of a bigramming tokenizer's decomposition of the same source text.
+///
+/// Requiring at least two spans and exact tiling is what keeps legitimate cases
+/// alive: a lone CJK character, or a run too short to bigram, is emitted whole by
+/// both members and must survive.
+fn is_ghost_whole_run(token: &Token, covering: &[(usize, usize)]) -> bool {
+    let Some((start, len)) = token.position() else {
+        return false;
+    };
+    if len < 2 {
+        return false;
+    }
+    let end = start + len;
+    let mut inside: Vec<(usize, usize)> = covering
+        .iter()
+        .copied()
+        .filter(|(s, e)| *s >= start && *e <= end && *e > *s && (*s, *e) != (start, end))
+        .collect();
+    if inside.len() < 2 {
+        return false;
+    }
+    inside.sort_unstable();
+    let mut cursor = start;
+    for (s, e) in inside {
+        // A gap means the finer tokens are not this run's decomposition.
+        if s > cursor {
+            break;
+        }
+        cursor = cursor.max(e);
+        if cursor == end {
+            return true;
+        }
+    }
+    false
 }
 
 impl Language for MultiLanguage {
@@ -306,6 +401,87 @@ mod tests {
         assert!(
             !terms.iter().any(|t| t == "built-in"),
             "ghost whole-hyphen term must not form: {terms:?}"
+        );
+    }
+
+    #[test]
+    fn no_whole_run_ghost_for_a_bigrammed_script() {
+        // An `en,ja` index runs both tokenizers. The English one splits on
+        // whitespace, so it emits the whole katakana run `エンジン` as one term,
+        // while the Japanese one emits `エン`, `ンジ`, `ジン`. The whole run is
+        // unreachable by any query — the query lexer bigrams too — but it counts
+        // toward the field length and inflates BM25.
+        let terms: Vec<String> = multi("en,ja")
+            .tokenize("検索エンジン")
+            .into_iter()
+            .map(|t| t.term)
+            .collect();
+        assert!(
+            !terms.iter().any(|t| t == "エンジン"),
+            "whole-run ghost survived: {terms:?}"
+        );
+        assert!(terms.iter().any(|t| t == "エン"), "bigrams must survive");
+        assert!(terms.iter().any(|t| t == "検索"), "bigrams must survive");
+
+        let terms: Vec<String> = multi("en,zh")
+            .tokenize("中文搜索引擎")
+            .into_iter()
+            .map(|t| t.term)
+            .collect();
+        assert!(
+            !terms.iter().any(|t| t == "中文搜索引擎"),
+            "whole-run ghost survived: {terms:?}"
+        );
+        assert!(terms.iter().any(|t| t == "中文"));
+    }
+
+    #[test]
+    fn a_short_or_single_character_run_is_not_a_ghost() {
+        // The other end of the rule: a run too short to bigram is emitted whole
+        // by every member, and it is legitimately searchable — dropping it would
+        // make an isolated character unfindable.
+        let terms: Vec<String> = multi("en,ja")
+            .tokenize("我 と 検")
+            .into_iter()
+            .map(|t| t.term)
+            .collect();
+        assert!(terms.contains(&"我".to_string()), "got {terms:?}");
+        assert!(terms.contains(&"検".to_string()), "got {terms:?}");
+        assert!(terms.contains(&"と".to_string()), "got {terms:?}");
+    }
+
+    #[test]
+    fn an_equivalent_multi_language_document_scores_like_a_single_language_one() {
+        // The point of removing the ghost: `en,ja` must not inflate field length
+        // and rescale BM25 for text that is entirely Japanese.
+        use crate::index::IndexBuilder;
+        let text = "検索エンジンの仕組み";
+
+        let mut single = IndexBuilder::new(multi("ja"));
+        single.ref_field("id").field("body", 1.0);
+        single.add("doc", 1.0, |name| match name {
+            "body" => Some(text.to_string()),
+            _ => None,
+        });
+        let single = single.build();
+
+        let mut mixed = IndexBuilder::new(multi("en,ja"));
+        mixed.ref_field("id").field("body", 1.0);
+        mixed.add("doc", 1.0, |name| match name {
+            "body" => Some(text.to_string()),
+            _ => None,
+        });
+        let mixed = mixed.build();
+
+        let one = single.search("検索").unwrap();
+        let other = mixed.search("検索").unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(other.len(), 1);
+        assert!(
+            (one[0].score - other[0].score).abs() < 1e-9,
+            "single-language scored {}, multi-language {}",
+            one[0].score,
+            other[0].score
         );
     }
 

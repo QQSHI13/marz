@@ -255,7 +255,18 @@ impl<'a> QueryLexer<'a> {
     }
 
     fn is_separator(&self, ch: char) -> bool {
-        self.separators.contains(ch)
+        // Also split on every character that *folds* to a space. The lexer reads
+        // raw text, before normalization, while the tokenizer normalizes: an
+        // ideographic or exotic space therefore used to glue `foo　-bar` into
+        // one term while `foo -bar` was a prohibition operator, silently
+        // disabling `+`, `-`, `field:` and `*` for anyone typing with a CJK
+        // input method.
+        //
+        // Deliberately not fixed by normalizing the whole query up front: query
+        // error offsets index the caller's original string, and full-width
+        // operator characters are a syntax decision that normalization would
+        // make silently.
+        self.separators.contains(ch) || crate::normalize::folds_to_space(ch)
     }
 
     fn lex_text(&mut self) -> Option<LexState> {

@@ -62,6 +62,11 @@ fixtures:
         js/fixtures/corpus_en.json js/fixtures/en.marz en
     cargo run --example mkfixture -p marz-core -- \
         js/fixtures/corpus_ja.json js/fixtures/ja.marz ja
+    # A corpus whose terms and field names collide with `Object.prototype`
+    # (`__proto__`, `constructor`, `toString`). Cannot come from mkfixture:
+    # the collision is in the *shape* of the data, not its text. See the
+    # "dictionary keys" tests in js/test/index.test.ts.
+    cargo run --example mkhostile -p marz-core -- js/fixtures/hostile.marz
 
 # Regenerate the English ranking oracle in tests/fixtures from lunr.js.
 #

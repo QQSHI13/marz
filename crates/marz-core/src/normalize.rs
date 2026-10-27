@@ -17,78 +17,31 @@
 /// 1. Full-width ASCII (U+FF01–U+FF5E) → ASCII.
 /// 2. Ideographic and other exotic spaces → U+0020.
 /// 3. Half-width katakana → full-width katakana, combining the voiced sound
-///    marks `ﾞ` and `ﾟ` into the preceding character where a composed form
-///    exists.
+///    marks `ﾞ` and `ﾟ` — and the combining marks U+3099/U+309A — into the
+///    preceding character where a composed form exists.
 /// 4. Lowercasing.
 ///
 /// Both the indexer and the query parser must call this, or the two sides will
 /// disagree.
+///
+/// Normalization is idempotent: `normalize(normalize(x)) == normalize(x)`.
+/// That property is load-bearing, because the query path normalizes a lexeme
+/// once and the tokenizer normalizes it again — a fold that composed only on
+/// the second pass (`ﾍ` + U+309A → `ヘ` + U+309A → `ペ`) would make a document
+/// unfindable by its own text.
 pub fn normalize(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
+    // Delegated so there is exactly one copy of the fold loop: the Turkish
+    // variant differs only in its lowercasing, and two copies drift.
+    normalize_fold_only(text).to_lowercase()
+}
 
-    while i < chars.len() {
-        let c = chars[i];
-
-        // Half-width katakana, possibly followed by a voiced sound mark.
-        if let Some(base) = halfwidth_katakana(c) {
-            let next = chars.get(i + 1).copied();
-            match next {
-                Some('\u{FF9E}') => {
-                    // Voiced: ｶ + ﾞ -> ガ
-                    if let Some(voiced) = compose_voiced(base) {
-                        out.push(voiced);
-                        i += 2;
-                        continue;
-                    }
-                }
-                Some('\u{FF9F}') => {
-                    // Semi-voiced: ﾊ + ﾟ -> パ
-                    if let Some(semi) = compose_semi_voiced(base) {
-                        out.push(semi);
-                        i += 2;
-                        continue;
-                    }
-                }
-                _ => {}
-            }
-            out.push(base);
-            i += 1;
-            continue;
-        }
-
-        // Combining voicing marks (NFKC/NFC): full-width Hiragana/Katakana
-        // base + U+3099/U+309A composes where a precomposed form exists
-        // (か + ゙ -> が, ハ + ゚ -> パ). Without this, decomposed and composed
-        // forms index as different terms.
-        if matches!(c, '\u{3099}' | '\u{309A}') {
-            // Lone mark with no base: pass through (trimmed later).
-            out.extend(fold_char(c));
-            i += 1;
-            continue;
-        }
-        if let Some(next) = chars.get(i + 1).copied() {
-            if next == '\u{3099}' {
-                if let Some(voiced) = compose_voicing(c, false) {
-                    out.push(voiced);
-                    i += 2;
-                    continue;
-                }
-            } else if next == '\u{309A}' {
-                if let Some(semi) = compose_voicing(c, true) {
-                    out.push(semi);
-                    i += 2;
-                    continue;
-                }
-            }
-        }
-
-        out.extend(fold_char(c));
-        i += 1;
-    }
-
-    out.to_lowercase()
+/// Whether `c` folds to a plain space in [`normalize`].
+///
+/// Shared with the query lexer, which must split on every character that folds
+/// to a space: the lexer reads raw text, so without this `foo　-bar` (U+3000)
+/// lexes as a single term while `foo -bar` is a prohibition operator.
+pub(crate) fn folds_to_space(c: char) -> bool {
+    matches!(c as u32, 0x3000 | 0x2000..=0x200A | 0x202F | 0x205F)
 }
 
 /// Normalize with the lowercasing rules of `code`.
@@ -157,6 +110,11 @@ fn normalize_fold_only(text: &str) -> String {
     while i < chars.len() {
         let c = chars[i];
         if let Some(base) = halfwidth_katakana(c) {
+            // A half-width base may be followed by a half-width mark (`ﾞ`) or
+            // by the combining mark U+3099/U+309A. Both must compose here, in
+            // the same pass: the combining mark case used to fall through and
+            // compose only on the *next* normalization, which made
+            // normalization non-idempotent and the text unsearchable.
             let next = chars.get(i + 1).copied();
             match next {
                 Some('\u{FF9E}') => {
@@ -168,6 +126,20 @@ fn normalize_fold_only(text: &str) -> String {
                 }
                 Some('\u{FF9F}') => {
                     if let Some(semi) = compose_semi_voiced(base) {
+                        out.push(semi);
+                        i += 2;
+                        continue;
+                    }
+                }
+                Some('\u{3099}') => {
+                    if let Some(voiced) = compose_voicing(base, false) {
+                        out.push(voiced);
+                        i += 2;
+                        continue;
+                    }
+                }
+                Some('\u{309A}') => {
+                    if let Some(semi) = compose_voicing(base, true) {
                         out.push(semi);
                         i += 2;
                         continue;
@@ -207,22 +179,24 @@ fn normalize_fold_only(text: &str) -> String {
 
 /// Fold a single character that needs no lookahead.
 fn fold_char(c: char) -> impl Iterator<Item = char> {
-    let folded = match c as u32 {
-        // Full-width ASCII variants -> ASCII.
-        0xFF01..=0xFF5E => char::from_u32(c as u32 - 0xFF01 + 0x21).unwrap_or(c),
-        // Ideographic space and assorted Unicode spaces -> plain space.
-        0x3000 | 0x2000..=0x200A | 0x202F | 0x205F => ' ',
-        // Full-width currency/sign oddities (NFKC compatibility folds).
-        0xFFE0 => '\u{00A2}', // ¢
-        0xFFE1 => '\u{00A3}', // £
-        0xFFE2 => '\u{00AC}', // ¬
-        0xFFE3 => '\u{00AF}', // ¯ (NFKC is space + combining macron; fold to macron)
-        0xFFE4 => '\u{00A6}', // ¦
-        0xFFE5 => '¥',
-        0xFFE6 => '\u{20A9}', // ₩
-        // Half-width Hangul (compatibility Jamo) -> standard Jamo (NFKC).
-        0xFFA0..=0xFFDC => halfwidth_hangul(c).unwrap_or(c),
-        _ => c,
+    let folded = if folds_to_space(c) {
+        ' '
+    } else {
+        match c as u32 {
+            // Full-width ASCII variants -> ASCII.
+            0xFF01..=0xFF5E => char::from_u32(c as u32 - 0xFF01 + 0x21).unwrap_or(c),
+            // Full-width currency/sign oddities (NFKC compatibility folds).
+            0xFFE0 => '\u{00A2}', // ¢
+            0xFFE1 => '\u{00A3}', // £
+            0xFFE2 => '\u{00AC}', // ¬
+            0xFFE3 => '\u{00AF}', // ¯ (NFKC is space + combining macron; fold to macron)
+            0xFFE4 => '\u{00A6}', // ¦
+            0xFFE5 => '¥',
+            0xFFE6 => '\u{20A9}', // ₩
+            // Half-width Hangul (compatibility Jamo) -> standard Jamo (NFKC).
+            0xFFA0..=0xFFDC => halfwidth_hangul(c).unwrap_or(c),
+            _ => c,
+        }
     };
     std::iter::once(folded)
 }
@@ -529,5 +503,41 @@ mod tests {
         // A voiced mark with no composable base must pass through.
         assert_eq!(normalize("\u{FF9E}"), "\u{FF9E}");
         assert_eq!(normalize("ｱ\u{FF9E}"), "ア\u{FF9E}");
+    }
+
+    #[test]
+    fn normalization_is_idempotent() {
+        // The query path normalizes a lexeme, then the tokenizer normalizes it
+        // again. A fold that only completes on the second pass makes a document
+        // unfindable by its own text — `ﾍ` + U+309A used to give `ヘ` + mark
+        // first and `ペ` second.
+        let samples = [
+            "ﾍ\u{309A}ﾝ",
+            "ｶ\u{3099}ｲ\u{3099}ﾄ\u{3099}",
+            "ﾊ\u{309A}ﾝ",
+            "ｳ\u{3099}",
+            "ｶﾞｲﾄﾞ",
+            "か\u{3099}し\u{309A}",
+            "ＲＵＳＴ　ｶﾞｲﾄﾞ",
+            "İstanbul\u{3000}検索",
+            "ａ\u{3099}",
+        ];
+        for sample in samples {
+            let once = normalize(sample);
+            let twice = normalize(&once);
+            assert_eq!(once, twice, "not idempotent for {sample:?}");
+        }
+    }
+
+    #[test]
+    fn halfwidth_base_composes_with_a_combining_mark_in_one_pass() {
+        // `ﾍ` + U+309A must be `ペ` immediately, not `ヘ` + U+309A.
+        assert_eq!(normalize("ﾍ\u{309A}"), "ペ");
+        assert_eq!(normalize("ﾍ\u{309A}ﾝ"), "ペン");
+        // …and the same base with U+3099 composes the voiced form.
+        assert_eq!(normalize("ﾍ\u{3099}"), "ベ");
+        // The full-width base + combining mark path still works.
+        assert_eq!(normalize("ヘ\u{309A}"), "ペ");
+        assert_eq!(normalize("か\u{3099}"), "が");
     }
 }

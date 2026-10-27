@@ -171,7 +171,76 @@ pub(crate) fn unescape_term(term: &str) -> String {
 /// A huge finite boost (e.g. `term^1e308`, which the parser accepts) overflows
 /// every score it touches to infinity, and infinities sort arbitrarily. The
 /// cap is far above any deliberate weighting, so only absurd boosts change.
+///
+/// This bounds one *input* to scoring. It is not on its own enough to keep
+/// scores finite: the phrase boost multiplies `PHRASE_BOOST` once per verified
+/// phrase, so a long repeated CJK phrase overflows regardless of what the clause
+/// boost was. `index::saturating_product`/`saturating_add` bound the arithmetic
+/// itself; the two are complementary, not alternatives.
 pub const MAX_CLAUSE_BOOST: f64 = 1e6;
+
+/// Index positions just past each unescaped wildcard, in `term` order.
+///
+/// Mirrors [`has_unescaped_wildcard`]'s backslash parity but reports *where*
+/// the real stars are, so a pattern body can be split on them without having
+/// to re-derive which ones are literal text.
+pub(crate) fn unescaped_wildcard_positions(term: &str) -> Vec<usize> {
+    let chars: Vec<char> = term.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '\\' {
+            if chars[i] == '*' {
+                out.push(i + 1);
+            }
+            i += 1;
+            continue;
+        }
+        let mut n = 0;
+        while i < chars.len() && chars[i] == '\\' {
+            n += 1;
+            i += 1;
+        }
+        if i < chars.len() && chars[i] == '*' {
+            if n % 2 == 0 {
+                out.push(i + 1);
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Whether `*` appears strictly inside `term`, with literal text on both sides.
+///
+/// `secur*ity` is a leading-and-trailing-free pattern whose star would be
+/// mangled by a stemmer: Porter treats `*` as an ordinary character and returns
+/// `secur*`, quietly widening the query to every term starting with `secur` and
+/// matching `secure` for `secur*ity`.
+pub(crate) fn has_interior_wildcard(term: &str) -> bool {
+    let chars: Vec<char> = term.chars().collect();
+    let stars = unescaped_wildcard_positions(term);
+    let Some(&first) = stars.first() else {
+        return false;
+    };
+    let last = *stars.last().expect("non-empty");
+    // Literal text before the first star and after the last one means a star
+    // sits between two pieces of text rather than at an edge.
+    first > 1 && last < chars.len()
+}
+
+/// Whether `term` consists only of characters some non-Latin script uses.
+///
+/// Interpolating a per-word stemmer over a term that mixes Latin words with CJK
+/// characters would stem the CJK characters too — Porter on a Japanese bigram
+/// returns one arbitrary character. Mixed-script terms are left alone; the
+/// script split in the tokenizer handles them.
+pub(crate) fn is_non_latin_term(term: &str) -> bool {
+    !term.is_empty()
+        && term
+            .chars()
+            .all(|c| !c.is_ascii() || crate::languages::cjk::is_combining_mark(c))
+}
 
 /// A full search query.
 #[derive(Debug, Clone)]

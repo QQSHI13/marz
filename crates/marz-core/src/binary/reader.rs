@@ -9,9 +9,20 @@
 //! # What is validated when
 //!
 //! [`BinaryIndex::open`] checks the parts that every later read depends on: the
-//! magic, the version, and that the section offsets ascend and lie inside the
-//! buffer. It deliberately does *not* walk the postings, because that would cost
-//! time proportional to the whole file and defeat the point of a lazy format.
+//! magic, the version, that the section offsets ascend and lie inside the
+//! buffer, and that the fixed-width tables fit their sections. It deliberately
+//! does *not* walk the postings or the document table, because that would cost
+//! time proportional to the file and defeat the point of a lazy format — `open`
+//! is the documented constant-time call, and `indexLanguage()` relies on it.
+//!
+//! Whole-structure invariants that a single forged header value could otherwise
+//! violate are checked by [`BinaryIndex::validate`], which materialization
+//! ([`crate::Index::from_binary`]) calls before it allocates anything. That
+//! covers the document table (references sorted, unique, contiguous), the term
+//! dictionary offsets, the postings offset table, and — most importantly — that
+//! the positions section is exactly the concatenation of the position blocks the
+//! postings reference, so a compact file cannot make every term point at one
+//! shared block and multiply the decode work.
 //!
 //! Everything decoded later is therefore treated as untrusted and bounds
 //! checked at the point of use, returning [`FormatError`]. A corrupt index
@@ -89,6 +100,10 @@ pub struct TermPostings {
     /// recomputes it from the decoded entries instead of trusting this, and
     /// direct `BinaryIndex` consumers doing their own scoring should too.
     pub document_frequency: u32,
+    /// Offset in the positions section where this term's blocks start.
+    pub positions_start: u32,
+    /// Offset just past this term's last block.
+    pub positions_end: u32,
     /// Per-field postings, ascending by field id.
     pub fields: Vec<FieldPostings>,
 }
@@ -300,19 +315,176 @@ impl<'a> BinaryIndex<'a> {
         // The doc offset table must be non-decreasing with its terminator
         // equal to the heap length: otherwise overlapping refs are silently
         // accepted (e.g. `[0,1,2]` corrupted to `[0,0,2]`).
-        let docs = self.section(self.header.docs_offset, self.header.terms_offset, "docs")?;
-        let heap_len = docs_len - self.doc_heap_base;
-        let mut prev = 0usize;
+        //
+        // This walk is linear in `doc_count`, so it lives in `validate`, not
+        // here: `open` is documented as constant-time and `indexLanguage()`
+        // calls it on every page that picks an index file. `doc_ref` keeps its
+        // own per-reference bounds check, so a lazy reader is still safe.
+        Ok(())
+    }
+
+    /// Check every whole-structure invariant, including the ones that are
+    /// linear in the file.
+    ///
+    /// [`BinaryIndex::open`] is deliberately cheap, which leaves invariants that
+    /// only a walk can establish. Those matter to a caller that is about to
+    /// materialize the index, because a compact but adversarial file can
+    /// otherwise multiply decode work or silently merge documents:
+    ///
+    /// * **Position-block aliasing.** Every term's `positions_base` could point
+    ///   at the same block, so 2,000 terms could share 50,000 positions: a
+    ///   102 KB file that took 57 s and 1.6 GB of RSS to materialize. Requiring
+    ///   the blocks to be contiguous and exactly cover the section rejects it in
+    ///   one pass, before any allocation. The writer already emits them
+    ///   contiguously, in term order.
+    /// * **Duplicate or unsorted document references.** Refs are interned in a
+    ///   `BTreeSet` by the writer, so genuinely sorted and unique. A forged
+    ///   duplicate silently merges two documents into one hit; a swapped pair
+    ///   makes `doc_id` fail to find a reference that is present.
+    /// * **Header counts and BM25 parameters** that contradict the rest of the
+    ///   file: `document_count != doc_count` changes IDF and every score,
+    ///   non-finite `k1`/`b` are meaningless, and `b` outside `[0, 1]` inverts
+    ///   length normalization.
+    /// * **Dictionary and postings tables** that do not tile their sections.
+    ///
+    /// Costs one pass over the document table, the term dictionary and the
+    /// postings. Call it before materializing; open-and-read-a-term callers do
+    /// not need it, because every accessor bounds checks its own reads.
+    pub fn validate(&self) -> Result<(), FormatError> {
+        // --- Header invariants the writer guarantees -------------------------
+        //
+        // `doc_count` is how many references were interned; `document_count` is
+        // BM25's N. Upsert semantics keep them equal (re-adding a ref replaces
+        // it), and a mismatch silently rescales every IDF: two documents scored
+        // 0.182 before a forged `document_count = 0` and 0.693 after, with no
+        // error anywhere.
+        //
+        // This is rejected rather than repaired because there is nothing to
+        // repair it *to*: N is not derivable from the file, and guessing it
+        // (from `doc_count`, say) would silently change ranking rather than
+        // report corrupt bytes. The counts are stored separately so the layout
+        // stays stable if upsert semantics ever let them diverge — if that
+        // happens, this check moves with the invariant.
+        if self.header.document_count != self.header.doc_count {
+            return Err(FormatError::InvalidHeader);
+        }
+        // `k1`/`b` are deliberately NOT rejected here. Both have a defined
+        // fallback the builder itself uses (`k1 = 1.2`, `b = 0.75`), so
+        // `Index::from_binary` sanitizes them with `sanitize_k1`/`sanitize_b`
+        // and a forged value degrades to the builder's default instead of
+        // refusing the whole index. The difference from the count above is that
+        // a wrong N cannot be repaired, while a wrong `k1` has an obvious safe
+        // value.
+        //
+        // A positions-free index must not carry a positions section; the
+        // converse matters too: with the flag set and an empty section, every
+        // phrase boost silently disappears.
+        let positions_len = (self.header.end_offset - self.header.positions_offset) as usize;
+        if self.header.has_positions()
+            && positions_len == 0
+            && self.header.term_count > 0
+            && self.header.doc_count > 0
+        {
+            return Err(FormatError::Truncated {
+                section: "positions",
+            });
+        }
+
+        // --- Document table --------------------------------------------------
+        let docs = self.docs_section()?;
+        let doc_count = self.header.doc_count as usize;
+        let heap_len =
+            (self.header.terms_offset - self.header.docs_offset) as usize - self.doc_heap_base;
+        let mut prev_offset = 0usize;
+        let mut previous_ref: Option<&str> = None;
         for i in 0..=doc_count {
-            let off = read_u32(docs, i * 4, "docs")? as usize;
-            if off < prev || off > heap_len {
+            let offset = read_u32(docs, i * 4, "docs")? as usize;
+            if offset < prev_offset || offset > heap_len {
                 return Err(FormatError::Truncated { section: "docs" });
             }
-            prev = off;
+            if i > 0 {
+                // Strictly increasing, bytewise: the writer interns references
+                // in a `BTreeSet`, so equal or descending neighbours mean
+                // forged bytes. Equality is the dangerous one — it makes two
+                // documents share one reference, merging their postings.
+                let reference = self.doc_ref(i as u32 - 1)?;
+                if let Some(previous) = previous_ref {
+                    if previous >= reference {
+                        return Err(FormatError::Truncated { section: "docs" });
+                    }
+                }
+                previous_ref = Some(reference);
+            }
+            prev_offset = offset;
         }
-        if prev != heap_len {
+        if prev_offset != heap_len {
             return Err(FormatError::Truncated { section: "docs" });
         }
+
+        // --- Dictionary block index must tile the dictionary ---------------
+        let terms = self.terms_section()?;
+        let dictionary_len = (self.header.postings_offset - self.header.terms_offset) as usize
+            - self.dictionary_base;
+        let mut prev = 0usize;
+        for block in 0..=self.header.term_block_count() {
+            let offset = read_u32(terms, block * 4, "terms")? as usize;
+            if offset < prev || offset > dictionary_len {
+                return Err(FormatError::Truncated { section: "terms" });
+            }
+            prev = offset;
+        }
+        if prev != dictionary_len {
+            return Err(FormatError::Truncated { section: "terms" });
+        }
+
+        // --- Postings offset table must tile the postings section ----------
+        let postings_len = (self.header.positions_offset - self.header.postings_offset) as usize;
+        let table = (self.header.term_block_count() + 1) * 4;
+        let mut prev = 0usize;
+        for term_id in 0..=self.header.term_count as usize {
+            let offset = read_u32(terms, table + term_id * 4, "terms")? as usize;
+            if offset < prev || offset > postings_len {
+                return Err(FormatError::Truncated {
+                    section: "postings",
+                });
+            }
+            prev = offset;
+        }
+        if prev != postings_len {
+            return Err(FormatError::Truncated {
+                section: "postings",
+            });
+        }
+
+        // --- Position blocks must be exactly the section -------------------
+        //
+        // The writer appends each term's blocks in term order, so term `n`'s
+        // base is where term `n - 1` ended and the last term ends at the section
+        // length. Accepting any other layout means accepting aliasing, and
+        // aliasing is how a small file buys gigabytes of decode work.
+        let mut expected = 0u32;
+        for term_id in 0..self.header.term_count {
+            let postings = self.postings(term_id)?;
+            if postings.positions_start != expected {
+                return Err(FormatError::Truncated {
+                    section: "positions",
+                });
+            }
+            expected = postings.positions_end;
+        }
+        let expected = if self.header.has_positions() {
+            expected as usize
+        } else {
+            // Without the flag the writer emits no blocks at all, and `open`
+            // has already required the section to be empty.
+            0
+        };
+        if expected != positions_len {
+            return Err(FormatError::Truncated {
+                section: "positions",
+            });
+        }
+
         Ok(())
     }
 
@@ -730,6 +902,8 @@ impl<'a> BinaryIndex<'a> {
         }
         Ok(TermPostings {
             document_frequency,
+            positions_start: positions_base,
+            positions_end: positions_offset,
             fields,
         })
     }

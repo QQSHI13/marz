@@ -68,12 +68,20 @@ are illustrative (toolchain and corpus dependent) and not pinned by CI — see
 | Binary, positions dropped | 493 KB (14%) | 782 KB (11%) |
 
 The binary format is read in place. `BinaryIndex::open` validates the header and
-computes section bounds in **~330 ns regardless of corpus size** — postings are
-decoded from the buffer as queries ask for them. Materializing the whole binary
-index into owned structures takes ~52 ms. (The browser build loads that way:
-`MarzIndex.load` materializes rather than memory-mapping, so budget one load
-per page.) Dropping positions costs highlighting and phrase
-verification.
+computes section bounds in **~400 ns regardless of corpus size** — postings are
+decoded from the buffer as queries ask for them. Whole-structure validation is a
+separate call: `BinaryIndex::validate` checks that the document table is sorted
+and unique, that the dictionary and postings tables tile their sections, and that
+the position blocks are exactly the positions section concatenated. That last
+check is not bookkeeping — without it a 102 KB file whose 2,000 terms all point
+at one shared 50,000-position block took 57 s and 1.6 GB of RSS to materialize.
+`validate` is linear (~2 ms at 5,000 documents, ~7 ms at 20,000), which is why it
+is not part of `open`: `indexLanguage()` reads only the header and must stay
+cheap. `Index::from_binary` — and so every load that materializes — runs it
+before allocating anything. Materializing the whole binary index into owned
+structures takes ~52 ms. (The browser build loads that way: `MarzIndex.load`
+materializes rather than memory-mapping, so budget one load per page.) Dropping
+positions costs highlighting and phrase verification.
 
 Search cost tracks how many documents match, not how many exist. A selective
 query over the 5,000-document English index takes **~3 ms**; a query for a term

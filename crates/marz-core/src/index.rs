@@ -506,8 +506,10 @@ impl IndexBuilder {
             .iter()
             .map(|f| f.name.clone())
             .collect::<Vec<_>>();
-        let average_field_lengths =
-            Self::calculate_average_field_lengths_static(&self.field_lengths, &field_names);
+        // One implementation with `from_binary`: the average is a pure function
+        // of the length matrix, and a second copy is exactly the kind of thing
+        // that drifts when only one side is fixed.
+        let average_field_lengths = average_field_lengths(&self.field_lengths, &field_names);
         let token_set = TokenSet::from_strs(self.inverted_index.keys().map(String::as_str));
 
         let stats = Stats {
@@ -531,39 +533,6 @@ impl IndexBuilder {
             stats,
             pipeline: Pipeline::new(self.language),
         }
-    }
-
-    fn calculate_average_field_lengths_static(
-        field_lengths: &HashMap<String, HashMap<String, usize>>,
-        field_names: &[String],
-    ) -> HashMap<String, f64> {
-        let mut total: HashMap<&str, usize> = HashMap::new();
-        let mut count: HashMap<&str, usize> = HashMap::new();
-
-        for (doc_ref, fields) in field_lengths {
-            let _ = doc_ref;
-            for (field_name, length) in fields {
-                // Skip empty fields: the average is over docs that *have* the
-                // field, otherwise every sparse field drags its average to zero
-                // and breaks length normalization.
-                if *length == 0 {
-                    continue;
-                }
-                *total.entry(field_name.as_str()).or_insert(0) += length;
-                *count.entry(field_name.as_str()).or_insert(0) += 1;
-            }
-        }
-
-        field_names
-            .iter()
-            .map(|name| {
-                let sum = total.get(name.as_str()).copied().unwrap_or(0) as f64;
-                let n = count.get(name.as_str()).copied().unwrap_or(0) as f64;
-                // No non-empty docs: 0.0 signals `score_term` to skip scoring.
-                let avg = if n > 0.0 { sum / n } else { 0.0 };
-                (name.clone(), avg)
-            })
-            .collect()
     }
 }
 
@@ -611,10 +580,29 @@ impl Index {
     /// Supports `+` required, `-` prohibited, `field:term`, `term^boost`,
     /// `term~edits`, and `*` wildcards.
     pub fn search(&self, query_string: &str) -> Result<Vec<SearchResult>, QueryParseError> {
+        self.search_limited(query_string, None)
+    }
+
+    /// Search, materializing match metadata for at most `limit` results.
+    ///
+    /// Equivalent to [`Index::search`] followed by truncation, except that
+    /// highlighting data is built only for the documents that survive the cut.
+    /// The difference is not cosmetic: a wildcard query over a 5,000-document
+    /// corpus spent 8.3 s and ~451 MB building 475,000 match-term entries and
+    /// 2.3 million positions, all to return the top ten.
+    ///
+    /// `limit` is a cap, not an offset: results are ranked identically either
+    /// way, and the first `N` of a limited search equal the first `N` of an
+    /// unlimited one.
+    pub fn search_limited(
+        &self,
+        query_string: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<SearchResult>, QueryParseError> {
         let language = self.pipeline.language();
         let separators = language.separator_chars();
         let query = parse_query(query_string, &self.fields, separators, &language)?;
-        Ok(self.execute_query(&query))
+        Ok(self.execute_query(&query, limit))
     }
 
     /// Execute a programmatic [`Query`] against the index.
@@ -624,7 +612,7 @@ impl Index {
     /// scoped to a field the index does not have simply matches nothing.
     /// Validate scopes up front if silence would hide a caller bug.
     pub fn query(&self, query: &Query) -> Vec<SearchResult> {
-        self.execute_query(query)
+        self.execute_query(query, None)
     }
 
     /// BM25 score for one term occurrence in one document field.
@@ -686,7 +674,7 @@ impl Index {
             field_boost,
             doc_boost,
         );
-        weight * boost
+        saturating_product(weight, boost)
     }
 
     /// Fold bypass terms (pipeline disabled) the way the parser would have.
@@ -724,13 +712,53 @@ impl Index {
         edits: Option<usize>,
     ) -> Vec<String> {
         if crate::query::has_unescaped_wildcard(clause_term) {
-            self.token_set.expand(term)
+            self.expand_wildcard_term(term)
         } else if let Some(edits) = edits {
             self.token_set.expand_fuzzy(term, edits)
         } else {
             self.token_set
                 .expand_exact(&crate::query::unescape_term(term))
         }
+    }
+
+    /// Expand a wildcard clause against the indexed terms, which are *stems*.
+    ///
+    /// Three cases need three different treatments; conflating them is how
+    /// wildcards quietly lose recall and gain false positives.
+    ///
+    /// * **A star with literal text on both sides** (`secur*ity`) is matched as
+    ///   written. It must not be stemmed: the stemmer treats `*` as an ordinary
+    ///   character, and Porter trims `secur*ity` to `secur*`, which then matches
+    ///   `secure`.
+    /// * **A star at an edge** (`aby*`, `*bar`, `*foo*`) keeps the raw pattern,
+    ///   because surface prefixes are what the user means and a stemmed prefix
+    ///   is not prefix-stable in either direction: stemming `aby` gives `abi`
+    ///   and stops finding `abysses` (indexed as `abyss`), while stemming `abas`
+    ///   gives `aba` and starts finding `abacinate`.
+    /// * **…plus an exact lookup of the stemmed body**, because the dictionary
+    ///   holds `searchabl` for `searchable`, and the raw surface pattern
+    ///   `searchable*` is longer than the term it should match.
+    ///
+    /// The union is what restores prefix recall without reintroducing the
+    /// over-stemming false positives.
+    fn expand_wildcard_term(&self, term: &str) -> Vec<String> {
+        if crate::query::has_interior_wildcard(term) {
+            return self.token_set.expand(term);
+        }
+
+        let mut out = self.token_set.expand(term);
+
+        // Only a plain word body can be stemmed. An escaped star is literal text
+        // (`a\*b`), a stars-only pattern (`**`) has no body, and stemming a
+        // non-Latin term would run a per-word stemmer over CJK characters.
+        let body = term.trim_matches('*');
+        if !body.is_empty() && !term.contains('\\') && !crate::query::is_non_latin_term(body) {
+            let stem = self.pipeline.language.stem(body);
+            if stem != body {
+                out.extend(self.token_set.expand_exact(&stem));
+            }
+        }
+        out
     }
 
     /// Boost multiplier for `term` in one document field, from phrase matches.
@@ -759,13 +787,13 @@ impl Index {
                     .map(|posting_doc| posting_doc.positions.as_slice())
             });
             if verified {
-                boost *= PHRASE_BOOST;
+                boost = saturating_product(boost, PHRASE_BOOST);
             }
         }
         boost
     }
 
-    fn execute_query(&self, query: &Query) -> Vec<SearchResult> {
+    fn execute_query(&self, query: &Query, limit: Option<usize>) -> Vec<SearchResult> {
         let language = self.pipeline.language();
         // Keyed by `&str` borrowed from `self.inverted_index`, which outlives the
         // query. Owning these meant a `String` allocation per document per term
@@ -773,7 +801,12 @@ impl Index {
         // document — so on a query matching the whole corpus the allocator was
         // doing more work than the scorer.
         let mut scores: HashMap<&str, f64> = HashMap::new();
-        let mut matching: HashMap<&str, MatchData> = HashMap::new();
+        // Expansions per scored clause, kept so match metadata can be built
+        // after ranking instead of while scoring. The clause's field scope rides
+        // along: metadata is per (term, field), so replaying a clause without it
+        // would report matches in fields the clause never queried, and a
+        // `title:` query would highlight body text.
+        let mut scored_clauses: Vec<(&[String], Vec<Contribution<'_>>)> = Vec::new();
         let mut required: Option<HashSet<&str>> = None;
         let mut prohibited: HashSet<&str> = HashSet::new();
         let mut matched_any = false;
@@ -859,57 +892,12 @@ impl Index {
                     continue;
                 }
                 let fold = folds[ti];
-                // Wildcard clauses bypass the pipeline (see `expand_clause_term`),
-                // but the index keys are STEMMED terms. Expansion of the raw
-                // surface form `searchable*` looks for tokens starting with
-                // "searchable" while the token set holds "searchabl" — a quiet
-                // zero-hit query for every word whose stem differs from its
-                // surface form. Stemming the pattern body first ("searchable"
-                // -> "searchabl", then expanding "searchabl*") matches how the
-                // index was built. A stem never lengthens a word, so prefix
-                // expansion after stemming matches at least what the raw
-                // prefix would have matched, and never less, for stemmed
-                // languages; for unstemmed languages it is the identity.
-                // `term*~N` keeps wildcard semantics (fuzzy+wildcard is
-                // defined as wildcard-only), so it stems too.
-                let expansion_term = if crate::query::has_unescaped_wildcard(&clause.term) {
-                    // Stem only the word body: strip the wildcard markers, run
-                    // the language stemmer, and rebuild the pattern body with
-                    // the SAME star markers the clause had — `expand` treats
-                    // the term as the pattern, so a bare stemmed body would
-                    // make stars-only patterns match exactly. Leading and
-                    // trailing markers survive; embedded stars don't (the
-                    // stemmer sees the body as one word).
-                    let leading = term.starts_with('*');
-                    let leading_escaped = clause.term.starts_with("\\*");
-                    let trailing = term.ends_with('*') && !leading_escaped;
-                    let body = term.trim_matches('*');
-                    if body.is_empty() || clause.term.contains("\\*") {
-                        // A stars-only pattern (`**`) or an escaped-star mix
-                        // has no safe one-word body; keep the term untouched.
-                        term.clone()
-                    } else {
-                        let stem = self.pipeline.language.stem(body);
-                        // The stem never lengthens into a new wildcard shape:
-                        // markers are re-attached around it verbatim, so
-                        // `stem(body)` expanding under the original pattern
-                        // matches every branch the body had.
-                        let mut out = String::with_capacity(stem.len() + 2);
-                        if leading && !leading_escaped {
-                            out.push('*');
-                        }
-                        out.push_str(&stem);
-                        if trailing {
-                            out.push('*');
-                        }
-                        out
-                    }
-                } else {
-                    term.clone()
-                };
-                for expanded in
-                    self.expand_clause_term(&clause.term, &expansion_term, clause.edit_distance)
-                {
+                // Wildcard clauses bypass the pipeline, and the index keys are
+                // STEMMED terms, so the pattern needs the treatment in
+                // `expand_wildcard_term` rather than a single stem. Non-wildcard
+                // terms were already stemmed by the pipeline (or are exact
+                // bypass lookups).
+                for expanded in self.expand_clause_term(&clause.term, term, clause.edit_distance) {
                     if !seen.insert(expanded.clone()) {
                         continue;
                     }
@@ -955,7 +943,7 @@ impl Index {
                     let Some(field_docs) = contribution.posting.fields.get(field_name) else {
                         continue;
                     };
-                    for (doc_ref, posting_doc) in field_docs {
+                    for doc_ref in field_docs.keys() {
                         matched_any = true;
 
                         // If this term belongs to a query phrase and that phrase
@@ -974,7 +962,7 @@ impl Index {
                             contribution.posting,
                             field_name,
                             doc_ref,
-                            contribution.boost * phrase_boost,
+                            saturating_product(contribution.boost, phrase_boost),
                             contribution.idf,
                         );
                         match contribution.fold {
@@ -984,20 +972,20 @@ impl Index {
                                 let entry = fold_scores
                                     .entry((doc_ref.as_str(), field_name.as_str(), union, fold))
                                     .or_insert(0.0);
-                                *entry += score;
+                                *entry = saturating_add(*entry, score);
                             }
                             None => {
-                                *scores.entry(doc_ref.as_str()).or_insert(0.0) += score;
+                                let entry = scores.entry(doc_ref.as_str()).or_insert(0.0);
+                                *entry = saturating_add(*entry, score);
                             }
                         }
-                        matching.entry(doc_ref.as_str()).or_default().add_term(
-                            contribution.term,
-                            field_name,
-                            &posting_doc.positions,
-                        );
                     }
                 }
             }
+            // Match metadata is deliberately NOT collected here: see the
+            // `limit`-aware pass below, which builds it only for the documents
+            // that survive ranking.
+            scored_clauses.push((clause.fields.as_slice(), contributions));
             // Fold groups harmonize here: each document keeps the maximum
             // across one union's folds, and every union joins the running
             // total like any other clause contribution. Keyed by union so
@@ -1010,7 +998,8 @@ impl Index {
                     *entry = entry.max(sum);
                 }
                 for ((doc_ref, _, _), best) in maxima {
-                    *scores.entry(doc_ref).or_insert(0.0) += best;
+                    let entry = scores.entry(doc_ref).or_insert(0.0);
+                    *entry = saturating_add(*entry, best);
                 }
             }
         }
@@ -1031,6 +1020,7 @@ impl Index {
                 })
                 .collect();
             results.sort_by(|a, b| a.ref_id.cmp(&b.ref_id));
+            results.truncate(limit.unwrap_or(usize::MAX));
             return results;
         }
 
@@ -1039,7 +1029,7 @@ impl Index {
             .filter(|(doc_ref, _)| !prohibited.contains(doc_ref))
             .filter(|(doc_ref, _)| satisfies_required(required.as_ref(), doc_ref))
             .map(|(doc_ref, score)| SearchResult {
-                match_data: matching.get(doc_ref).cloned().unwrap_or_default(),
+                match_data: MatchData::default(),
                 ref_id: doc_ref.to_string(),
                 score,
             })
@@ -1051,7 +1041,60 @@ impl Index {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.ref_id.cmp(&b.ref_id))
         });
+        // Truncate before building metadata, not after. Converting match data is
+        // the expensive half: a broad wildcard over a 5,000-document corpus
+        // produced 475,000 match-term entries and 2.3 million positions for a
+        // caller that asked for ten hits.
+        results.truncate(limit.unwrap_or(usize::MAX));
+
+        self.collect_match_data(&scored_clauses, &mut results);
         results
+    }
+
+    /// Fill in [`MatchData`] for the given results only.
+    ///
+    /// Runs after ranking and truncation, so the work is bounded by the number
+    /// of results the caller will actually see rather than by every document the
+    /// query touched. Each clause's expansions are re-walked: the posting lookups
+    /// are hash hits, while the alternative — collecting `(term, field,
+    /// positions)` eagerly — allocates exactly the metadata this pass exists to
+    /// avoid.
+    fn collect_match_data(
+        &self,
+        scored_clauses: &[(&[String], Vec<Contribution<'_>>)],
+        results: &mut [SearchResult],
+    ) {
+        if results.is_empty() || scored_clauses.is_empty() {
+            return;
+        }
+        let wanted: HashSet<&str> = results.iter().map(|r| r.ref_id.as_str()).collect();
+        let mut matching: HashMap<&str, MatchData> = HashMap::with_capacity(wanted.len());
+        for (clause_fields, contributions) in scored_clauses {
+            for contribution in contributions {
+                // Only the fields the clause was scoped to, exactly like the
+                // scoring pass: a `title:` clause must not report body matches.
+                for field_name in clause_fields.iter() {
+                    let Some(field_docs) = contribution.posting.fields.get(field_name) else {
+                        continue;
+                    };
+                    for (doc_ref, posting_doc) in field_docs {
+                        if !wanted.contains(doc_ref.as_str()) {
+                            continue;
+                        }
+                        matching.entry(doc_ref.as_str()).or_default().add_term(
+                            contribution.term,
+                            field_name,
+                            &posting_doc.positions,
+                        );
+                    }
+                }
+            }
+        }
+        for result in results.iter_mut() {
+            if let Some(data) = matching.remove(result.ref_id.as_str()) {
+                result.match_data = data;
+            }
+        }
     }
 
     /// Every document reference known to the index.
@@ -1107,6 +1150,13 @@ impl Index {
         language: LanguageRef,
     ) -> Result<Self, crate::binary::FormatError> {
         let binary = crate::binary::BinaryIndex::open(bytes)?;
+
+        // Whole-structure validation before anything is allocated. `open` is
+        // constant-time by contract, so the invariants only a walk can establish
+        // — contiguous position blocks, sorted unique references, consistent
+        // tables — are checked here, where the cost is bounded by work this call
+        // is about to do anyway.
+        binary.validate()?;
 
         // Canonical member lists, not raw strings: `"en, ja"` and `"en,ja"`
         // are the same configuration, while `"ja,en"` is genuinely different
@@ -1306,6 +1356,62 @@ fn sanitize_b(b: f64) -> f64 {
         b.clamp(0.0, 1.0)
     } else {
         0.75
+    }
+}
+
+/// Multiply two non-negative score factors without ever producing `inf`/`NaN`.
+///
+/// The BM25 inputs are guarded (`bm25_weight` rejects anything non-finite), but
+/// nothing guarded what happens *after*: a clause boost of `1e308` times a
+/// phrase boost of 100 is `inf`, and an infinite boost times a zero weight is
+/// `NaN`. Both used to reach the caller — one document can be searched with a
+/// long repeated CJK phrase, or with eight `term^1.7e308` clauses.
+///
+/// One policy for every multiplication and sum in scoring: zero anywhere means
+/// zero (short-circuited, so `0 × inf` cannot become `NaN`), and overflow
+/// saturates at [`f64::MAX`] rather than extrapolating. Saturating keeps
+/// ranking meaningful — the overflowing document still sorts first — while
+/// guaranteeing the number JavaScript receives is finite.
+///
+/// Complementary to `MAX_CLAUSE_BOOST` (which bounds one clause-boost input) and
+/// to `sanitize_k1`/`sanitize_b` (which bound the BM25 parameters on load): those
+/// keep the operands sane, this keeps the arithmetic finite. The phrase boost is
+/// `PHRASE_BOOST` per verified phrase, so a long repeated CJK phrase overflows
+/// with no absurd input at all.
+fn saturating_product(a: f64, b: f64) -> f64 {
+    if a == 0.0 || b == 0.0 {
+        return 0.0;
+    }
+    let product = a * b;
+    if product.is_finite() {
+        product
+    } else if product.is_nan() {
+        // Only reachable with mixed signs, which the guards above exclude; a
+        // score that cannot be computed contributes nothing.
+        0.0
+    } else {
+        f64::MAX
+    }
+}
+
+/// Add two score contributions without ever producing `inf`/`NaN`.
+///
+/// See [`saturating_product`]: eight finite-but-huge clause scores used to sum
+/// to `inf`, which sorts unpredictably once it reaches the caller.
+fn saturating_add(a: f64, b: f64) -> f64 {
+    if a == 0.0 {
+        return if b.is_finite() { b } else { 0.0 };
+    }
+    if b == 0.0 {
+        return a;
+    }
+    let sum = a + b;
+    if sum.is_finite() {
+        sum
+    } else if sum.is_nan() {
+        0.0
+    } else {
+        f64::MAX
     }
 }
 
