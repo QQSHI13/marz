@@ -507,6 +507,190 @@ describe("CJK search", () => {
   });
 });
 
+describe("dictionary keys that collide with Object.prototype", () => {
+  // A `matches` map is keyed by document text, and document text can be
+  // anything — including names `Object.prototype` already defines. Assigning
+  // `__proto__` on an ordinary object resolves the inherited accessor instead of
+  // creating an own property, so the term disappeared from the serialized map,
+  // `Object.keys` came back empty and the highlight was lost. The maps are built
+  // with `Object.create(null)` now, so every key is an own data property.
+  let hostile: MarzIndex;
+
+  before(async () => {
+    hostile = await load(await readFile(fixture("hostile.marz")));
+  });
+
+  after(() => hostile?.free());
+
+  test("a __proto__ term is an own enumerable property", () => {
+    const [hit] = hostile.search("__proto__");
+    assert.ok(hit, "an indexed __proto__ term must match");
+    assert.deepEqual(Object.keys(hit.matches), ["__proto__"]);
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(hit.matches, "__proto__"),
+      "__proto__ must be an own property, not a prototype change",
+    );
+    // And it survives JSON, which is what a caller ships to a renderer.
+    assert.ok(JSON.stringify(hit.matches).includes("__proto__"));
+    // No prototype pollution: the plain object prototype is untouched.
+    assert.equal({}.polluted, undefined);
+  });
+
+  test("a __proto__ field name is an own enumerable property", () => {
+    const [hit] = hostile.search("__proto__:__proto__");
+    assert.ok(hit, "a query scoped to a __proto__ field must work");
+    const fields = hit.matches["__proto__"];
+    assert.ok(fields, "the term must be present");
+    assert.deepEqual(Object.keys(fields), ["__proto__"]);
+    assert.ok(Array.isArray(fields["__proto__"]));
+    assert.ok(fields["__proto__"].length > 0);
+  });
+
+  test("constructor and toString work as ordinary keys", () => {
+    // Controls: these shadow inherited properties rather than replacing the
+    // prototype, so they broke differently (or not at all) before the fix.
+    const [hit] = hostile.search("constructor");
+    assert.deepEqual(Object.keys(hit.matches), ["constructor"]);
+    const [shadow] = hostile.search("toString");
+    // `toString` is stemmed to `tostr`; the point is that the key is a normal
+    // own property, not that the surface form is preserved.
+    assert.equal(Object.keys(shadow.matches).length, 1);
+    assert.ok(Object.prototype.hasOwnProperty.call(shadow.matches, "tostr"));
+  });
+
+  test("highlight still finds a __proto__ match", async () => {
+    const [hit] = hostile.search("__proto__");
+    const segments = await highlight(
+      hit,
+      "body",
+      "__proto__ and constructor and toString",
+    );
+    const matched = segments.filter((s) => s.matched).map((s) => s.text);
+    assert.deepEqual(matched, ["__proto__"]);
+  });
+});
+
+describe("index sources", () => {
+  test("loads a Blob", async () => {
+    const bytes = await readFile(fixture("en.marz"));
+    const index = await load(new Blob([bytes as Uint8Array]));
+    assert.equal(index.documentCount, 3);
+    assert.ok(index.search("keyboard").length > 0);
+    index.free();
+  });
+
+  test("loads a File", async () => {
+    // The documented case that used to fail: a `File` is not fetchable, and it
+    // fell through to `fetch`, throwing `Failed to parse URL from [object File]`.
+    const bytes = await readFile(fixture("en.marz"));
+    const file = new File([bytes as Uint8Array], "en.marz");
+    const index = await load(file);
+    assert.equal(index.documentCount, 3);
+    index.free();
+  });
+
+  test("loads a Uint8Array from another realm", async () => {
+    // `instanceof Uint8Array` compares constructors, and a buffer that crossed a
+    // realm boundary has a different one. Brand checks (`ArrayBuffer.isView`)
+    // survive the crossing; a constructor check does not.
+    const bytes = await readFile(fixture("en.marz"));
+    const foreign = new Uint8Array(bytes.length);
+    foreign.set(bytes);
+    // Round-trip through a structured clone, which is what a worker postMessage
+    // or `structuredClone` does, and what makes the constructor foreign.
+    const clone = structuredClone(foreign) as Uint8Array;
+    const index = await load(clone);
+    assert.equal(index.documentCount, 3);
+    index.free();
+  });
+
+  test("loads a subarray view without reading past its slice", async () => {
+    // A view over a larger buffer must hand over only its own window, or the
+    // reader would see bytes before the index start.
+    const bytes = await readFile(fixture("en.marz"));
+    const padded = new Uint8Array(bytes.length + 64);
+    padded.set(bytes, 32);
+    const view = padded.subarray(32, 32 + bytes.length);
+    const index = await load(view);
+    assert.equal(index.documentCount, 3);
+    index.free();
+  });
+
+  test("reports the language of index bytes passed as a view", async () => {
+    const bytes = await readFile(fixture("ja.marz"));
+    assert.equal(await indexLanguage(new DataView(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength,
+    )), "ja");
+  });
+});
+
+describe("highlight shape safety", () => {
+  const text = "some text";
+  const base = { ref: "x", score: 1 };
+
+  test("a null nested field map does not throw", async () => {
+    // The shape-safety contract: caller-built hits may hold anything, and
+    // rendering must not throw on shape. `fields[field]` on a null field map
+    // used to throw.
+    const segments = await highlight(
+      { ...base, matches: { keyboard: null } } as never,
+      "text",
+      text,
+    );
+    assert.deepEqual(segments, [{ text, matched: false }]);
+  });
+
+  test("every malformed shape renders unmatched instead of throwing", async () => {
+    for (const matches of [
+      { keyboard: null },
+      { keyboard: undefined },
+      { keyboard: [] },
+      { keyboard: 42 },
+      { keyboard: "nope" },
+      { keyboard: { text: null } },
+      { keyboard: { text: 42 } },
+      { keyboard: { text: [[]] } },
+      { keyboard: { text: [[1]] } },
+      { keyboard: { text: [[1, 2, 3]] } },
+      { keyboard: { text: [["1", "2"]] } },
+      { keyboard: { text: [[Number.NaN, 2]] } },
+      { keyboard: { text: [[1, Number.POSITIVE_INFINITY]] } },
+    ]) {
+      const segments = await highlight(
+        { ...base, matches } as never,
+        "text",
+        text,
+      );
+      assert.deepEqual(
+        segments,
+        [{ text, matched: false }],
+        `shape ${JSON.stringify(matches)} should render unmatched`,
+      );
+    }
+  });
+
+  test("a valid span among malformed ones still highlights", async () => {
+    const segments = await highlight(
+      {
+        ...base,
+        matches: {
+          bad: null,
+          alsoBad: { text: "nope" },
+          good: { text: [[5, 4]] },
+        },
+      } as never,
+      "text",
+      text,
+    );
+    assert.deepEqual(segments, [
+      { text: "some ", matched: false },
+      { text: "text", matched: true },
+    ]);
+  });
+});
+
 describe("memory", () => {
   test("free() releases the index and using it afterwards throws", async () => {
     const index = await load(await readFile(fixture("en.marz")));

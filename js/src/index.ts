@@ -87,8 +87,8 @@ export function initialize(source?: WasmSource): Promise<unknown> {
 /**
  * Fetch and load an index.
  *
- * `source` is a URL to fetch, or bytes already in hand — from a cache, a
- * `File` the user dropped, or a worker `postMessage`.
+ * `source` is a URL to fetch, or bytes already in hand — from a cache, a `File`
+ * the user dropped, a `Blob`, or a worker `postMessage`.
  *
  * Give `expectedLanguage` to assert what the bytes should be. A pipeline that
  * ships the wrong per-locale file otherwise produces a search box that finds
@@ -98,38 +98,106 @@ export function initialize(source?: WasmSource): Promise<unknown> {
  * the normal case — or call `.free()` when done.
  */
 export async function load(
-  source: string | URL | Request | ArrayBuffer | Uint8Array,
+  source:
+    | string
+    | URL
+    | Request
+    | Blob
+    | ArrayBuffer
+    | ArrayBufferView,
   expectedLanguage?: string,
   wasmSource?: WasmSource,
 ): Promise<MarzIndex> {
   await initialize(wasmSource);
 
-  let bytes: Uint8Array;
-  if (source instanceof Uint8Array) {
-    bytes = source;
-  } else if (source instanceof ArrayBuffer) {
-    bytes = new Uint8Array(source);
-  } else {
-    const response = await fetch(source as string | URL | Request);
-    if (!response.ok) {
-      // The status is the whole diagnosis here: a 404 means the build did not
-      // emit the index, a 200 serving HTML means a dev server rewrote the path
-      // to index.html, and both look identical from inside the reader.
-      // `Request` stringifies to `[object Request]`, so quote its URL instead.
-      const where =
-        typeof source !== "string" &&
-        typeof (source as Request).url === "string"
-          ? (source as Request).url
-          : String(source);
-      throw new Error(
-        `could not fetch index from ${where}: ` +
-          `${response.status} ${response.statusText}`,
-      );
-    }
-    bytes = new Uint8Array(await response.arrayBuffer());
+  return MarzIndex.load(await toBytes(source), expectedLanguage);
+}
+
+/**
+ * Convert every accepted index source into bytes.
+ *
+ * Three things are easy to get wrong here, and each produces a confusing error
+ * rather than a useful one:
+ *
+ * - A `File` or `Blob` is not fetchable. The documentation promised a dropped
+ *   `File` would work, but it fell through to `fetch` and threw
+ *   `TypeError: Failed to parse URL from [object File]`. `arrayBuffer()` is the
+ *   supported way to read one.
+ * - `instanceof Uint8Array` fails for a typed array created in another realm (an
+ *   iframe, a worker, `structuredClone`) because the constructor is a different
+ *   object. Such a buffer is not fetchable either, so it has to be recognised by
+ *   its brand — `ArrayBuffer.isView` — and by the `[object ...]` tag.
+ * - A `DataView` is an `ArrayBufferView` but not a `TypedArray`, so reading
+ *   `buffer`/`byteOffset`/`byteLength` is the only general path.
+ */
+async function toBytes(
+  source:
+    | string
+    | URL
+    | Request
+    | Blob
+    | ArrayBuffer
+    | ArrayBufferView,
+): Promise<Uint8Array> {
+  if (ArrayBuffer.isView(source)) {
+    // Covers typed arrays and `DataView`, from any realm. Copy the view's own
+    // window rather than the whole backing buffer: a subarray would otherwise
+    // hand the reader bytes that start before the index.
+    return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+  }
+  if (isArrayBuffer(source)) {
+    return new Uint8Array(source);
+  }
+  if (isBlob(source)) {
+    return new Uint8Array(await source.arrayBuffer());
   }
 
-  return MarzIndex.load(bytes, expectedLanguage);
+  const response = await fetch(source as string | URL | Request);
+  if (!response.ok) {
+    // The status is the whole diagnosis here: a 404 means the build did not
+    // emit the index, a 200 serving HTML means a dev server rewrote the path
+    // to index.html, and both look identical from inside the reader.
+    // `Request` stringifies to `[object Request]`, so quote its URL instead.
+    const where =
+      typeof source !== "string" &&
+      typeof (source as Request).url === "string"
+        ? (source as Request).url
+        : String(source);
+    throw new Error(
+      `could not fetch index from ${where}: ` +
+        `${response.status} ${response.statusText}`,
+    );
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/**
+ * Realm-safe `ArrayBuffer` test.
+ *
+ * `instanceof` compares constructors, and an iframe or worker has its own. The
+ * `[object ArrayBuffer]` tag comes from the internal slot, so it survives the
+ * crossing. `SharedArrayBuffer` is deliberately not accepted: `new Uint8Array`
+ * on one yields a view the wasm-bindgen memory copy rejects.
+ */
+function isArrayBuffer(value: unknown): value is ArrayBuffer {
+  return Object.prototype.toString.call(value) === "[object ArrayBuffer]";
+}
+
+/**
+ * Realm-safe `Blob`/`File` test.
+ *
+ * Duck-typed on `arrayBuffer()`, which is the capability actually used, plus a
+ * type/size shape check so an ordinary object with an `arrayBuffer` method is
+ * not mistaken for binary data. `File` extends `Blob`, so this covers both.
+ */
+function isBlob(value: unknown): value is Blob {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Blob;
+  return (
+    typeof candidate.arrayBuffer === "function" &&
+    typeof candidate.size === "number" &&
+    typeof candidate.type === "string"
+  );
 }
 
 /** Language codes this build supports. */
@@ -155,12 +223,14 @@ export async function version(
  * fetched buffer before deciding whether to load it.
  */
 export async function indexLanguage(
-  bytes: ArrayBuffer | Uint8Array,
+  bytes: ArrayBuffer | ArrayBufferView,
   wasmSource?: WasmSource,
 ): Promise<string> {
   await initialize(wasmSource);
   return wasmIndexLanguage(
-    bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+    ArrayBuffer.isView(bytes)
+      ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      : new Uint8Array(bytes),
   );
 }
 
@@ -279,7 +349,13 @@ export async function highlight(
 
   const spans: Array<[number, number]> = [];
   for (const fields of Object.values(hit.matches)) {
-    const spansForField: unknown = fields[field] ?? [];
+    // A caller-built hit may hold anything, including `null` where a field map
+    // belongs — the shape-safety contract says rendering must not throw on
+    // shape, so indexing into it unchecked is the bug this guards.
+    if (typeof fields !== "object" || fields === null) {
+      continue;
+    }
+    const spansForField: unknown = (fields as Record<string, unknown>)[field] ?? [];
     // Caller-built hits may hold anything here: a non-array (or a pair that
     // is not a [start, length] pair) would throw in the loop below, and
     // search-result rendering must never throw on shape.

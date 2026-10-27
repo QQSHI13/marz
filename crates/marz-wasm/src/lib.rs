@@ -121,7 +121,7 @@ fn error(message: &str) -> JsValue {
 /// Set a property, treating failure as impossible.
 ///
 /// `Reflect::set` returns `Ok(false)` when a property is not writable. Every
-/// object written here was created by `Object::new` one line earlier, so a
+/// object written here was created by [`open_object`] one line earlier, so a
 /// refusal cannot happen — but silently dropping e.g. `ref` would ship an
 /// incomplete hit, so a refusal throws rather than vanishing.
 fn set(target: &js_sys::Object, key: &str, value: &JsValue) -> Result<(), JsValue> {
@@ -136,6 +136,30 @@ fn set(target: &js_sys::Object, key: &str, value: &JsValue) -> Result<(), JsValu
             "could not build search result (property {key:?})"
         ))),
     }
+}
+
+/// A plain object with **no prototype**, for dictionaries keyed by text.
+///
+/// Two dictionary shapes cross this boundary: the term map and each term's
+/// field map. Their keys are arbitrary strings from the corpus, and `Reflect::set`
+/// on an ordinary object resolves special names through `Object.prototype`
+/// instead of creating an own property:
+///
+/// * `__proto__` is an accessor, so assigning it replaces the object's prototype
+///   and the term vanishes — `matches` serializes as `{}` and `Object.keys` is
+///   empty, which also loses the highlight for that term.
+/// * `constructor` and `toString` shadow inherited properties but still work; the
+///   fix has to cover them without breaking them.
+///
+/// `Object.create(null)` has no prototype chain at all, so every name — `__proto__`
+/// included — becomes an ordinary enumerable own data property, and `JSON.stringify`
+/// emits it. Costs one extra call per result and per matched term; the alternative
+/// is a result whose shape depends on what the document happened to contain.
+fn open_object() -> js_sys::Object {
+    // `Object.create` takes `&Object<T>`; `null` is the argument that means "no
+    // prototype", and a null handle passes straight through to JavaScript.
+    let null = JsValue::NULL.unchecked_into::<js_sys::Object>();
+    js_sys::Object::create(&null)
 }
 
 /// Language codes this build supports.
@@ -309,11 +333,13 @@ impl MarzIndex {
     /// A `*` wildcard wins over `~N`: `foo*~1` runs the wildcard search and
     /// ignores the edit distance.
     ///
-    /// `limit` caps how many hits are converted to JavaScript objects. Scoring
-    /// happens for the whole corpus either way — the cap saves building position
-    /// maps for results past the first page, which is where the conversion cost
-    /// is. Must be a non-negative integer (`-0.0` behaves as `0`); absurdly
-    /// large values clamp to "no limit" rather than allocating.
+    /// `limit` caps how many hits are scored *and* converted. Scoring still runs
+    /// for the whole corpus, because ranking needs every candidate's score; the
+    /// cap skips building match metadata for results past the cut, which is the
+    /// expensive half (a broad wildcard over 5,000 documents produced 475,000
+    /// match-term entries for a caller asking for ten). The first `N` results are
+    /// identical either way. Must be a non-negative integer (`-0.0` behaves as
+    /// `0`); absurdly large values clamp to "no limit" rather than allocating.
     ///
     /// Throws an `Error` if the query cannot be parsed. The error carries
     /// `query` plus `start` and `end` offsets into it, enough to underline the
@@ -321,7 +347,28 @@ impl MarzIndex {
     /// units — convert with `Array.from(query)` if highlighting astral text.
     #[wasm_bindgen(unchecked_return_type = "SearchResult[]")]
     pub fn search(&self, query: &str, limit: Option<f64>) -> Result<js_sys::Array, JsValue> {
-        let results = self.index.search(query).map_err(|e| {
+        // Validate the limit before searching, so a bad argument fails without
+        // paying for the query.
+        let take = match limit {
+            None => usize::MAX,
+            Some(v) => {
+                if !v.is_finite() || v < 0.0 || v.fract() != 0.0 {
+                    return Err(error(&format!(
+                        "limit must be a non-negative integer, got {v}"
+                    )));
+                }
+                // Clamp absurdly large values (2**53) rather than trying to
+                // allocate: they mean "no limit" in practice.
+                v.min(usize::MAX as f64) as usize
+            }
+        };
+
+        // Push the cap into core rather than truncating here. Truncating after
+        // the fact still left core building match metadata — term maps and
+        // position vectors — for every hit: a broad wildcard over a
+        // 5,000-document corpus spent 8.3 s and ~451 MB to return ten results.
+        // Ranking is unaffected; only the metadata for dropped hits is skipped.
+        let results = self.index.search_limited(query, Some(take)).map_err(|e| {
             let err = js_sys::Error::new(&format!("{} in query {query:?}", e.message));
             // On the error rather than in the message, so that `err.message`
             // stays a sentence a user can be shown while a caller that wants to
@@ -339,28 +386,15 @@ impl MarzIndex {
             JsValue::from(err)
         })?;
 
-        let take = match limit {
-            None => usize::MAX,
-            Some(v) => {
-                if !v.is_finite() || v < 0.0 || v.fract() != 0.0 {
-                    return Err(error(&format!(
-                        "limit must be a non-negative integer, got {v}"
-                    )));
-                }
-                // Clamp absurdly large values (2**53) rather than trying to
-                // allocate: they mean "no limit" in practice.
-                v.min(usize::MAX as f64) as usize
-            }
-        };
         let out = js_sys::Array::new();
-        for result in results.iter().take(take) {
+        for result in results.iter() {
             let hit = js_sys::Object::new();
             set(&hit, "ref", &JsValue::from_str(&result.ref_id))?;
             set(&hit, "score", &JsValue::from_f64(result.score))?;
 
-            let matches = js_sys::Object::new();
+            let matches = open_object();
             for (term, fields) in &result.match_data.terms {
-                let per_field = js_sys::Object::new();
+                let per_field = open_object();
                 for (field, positions) in fields {
                     let spans = js_sys::Array::new();
                     for (start, length) in positions {

@@ -210,6 +210,43 @@ class TestBuilder:
         assert builder.build().document_count == 1
         assert builder.build().document_count == 1
 
+    def test_upsert_replaces_in_place_and_keeps_order(self):
+        # Staging used to scan every staged document per `add`, which made n
+        # adds quadratic: 20,000 documentation-style references took 18.6 s
+        # against 5.3 s for the core builder doing the same work. Behaviour must
+        # be unchanged by the map that fixed it.
+        builder = marz.IndexBuilder("en")
+        builder.field("body")
+        from_words = ["alpha", "beta", "gamma"]
+        for i, word in enumerate(from_words):
+            builder.add({"id": f"doc-{i}", "body": word})
+        assert builder.staged == 3
+
+        # Replace the middle document: count stays, order stays, content changes.
+        builder.add({"id": "doc-1", "body": "replacement"})
+        assert builder.staged == 3
+
+        index = builder.build()
+        assert index.document_count == 3
+        assert [hit.ref for hit in index.search("replacement")] == ["doc-1"]
+        assert [hit.ref for hit in index.search("beta")] == []
+
+    def test_many_unique_references_stage_linearly(self):
+        # A count assertion rather than a timing one: the point is that every
+        # reference is stored once, which is what made staging quadratic.
+        builder = marz.IndexBuilder("en")
+        builder.field("body")
+        for i in range(2_000):
+            builder.add({"id": f"guide/{i}/index", "body": f"page number {i}"})
+        assert builder.staged == 2_000
+        # And a second pass of upserts does not grow the staging area.
+        for i in range(2_000):
+            builder.add({"id": f"guide/{i}/index", "body": f"page number {i} again"})
+        assert builder.staged == 2_000
+        index = builder.build()
+        assert index.document_count == 2_000
+        assert len(index.search("number")) == 2_000
+
     def test_clear_discards_documents_but_keeps_fields(self):
         builder = marz.IndexBuilder("en")
         builder.field("body")

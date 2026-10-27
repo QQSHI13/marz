@@ -64,6 +64,14 @@ pub struct MarzBuilder {
     ref_field: String,
     fields: Vec<(String, f64)>,
     docs: Vec<StagedDoc>,
+    /// Staged reference -> index in `docs`.
+    ///
+    /// Upsert used to scan `docs` linearly, which made staging *n* documents
+    /// quadratic: 20,000 documentation-style references took 18.6 s against
+    /// 5.3 s for the core builder doing the same work. The map makes replacement
+    /// a single lookup; `docs` keeps insertion order so promotion to the core
+    /// builder is unchanged.
+    index: HashMap<String, usize>,
     k1: f64,
     b: f64,
     rehydrated: Option<CoreBuilder>,
@@ -117,6 +125,7 @@ impl MarzBuilder {
             ref_field,
             fields: Vec::new(),
             docs: Vec::new(),
+            index: HashMap::new(),
             k1,
             b,
             rehydrated: None,
@@ -153,6 +162,10 @@ impl MarzBuilder {
             ref_field: ref_field.trim().to_string(),
             fields,
             docs: Vec::new(),
+            // No staged documents, so the reference -> index map starts empty
+            // even though the core builder is rehydrated: `docs` is the staging
+            // list, and it is what the map indexes.
+            index: HashMap::new(),
             // Unused in rehydrated builds: the restored core builder already
             // carries the index's tuning.
             k1: 1.2,
@@ -272,11 +285,14 @@ impl MarzBuilder {
             boost,
             fields,
         };
-        // Upsert: same reference replaces, matching core `IndexBuilder::add`.
-        if let Some(existing) = self.docs.iter_mut().find(|d| d.doc_ref == staged.doc_ref) {
-            *existing = staged;
-        } else {
-            self.docs.push(staged);
+        // Upsert through the index map: same reference replaces in place,
+        // matching core `IndexBuilder::add`. O(1) rather than a scan.
+        match self.index.get(&staged.doc_ref) {
+            Some(&at) => self.docs[at] = staged,
+            None => {
+                self.index.insert(staged.doc_ref.clone(), self.docs.len());
+                self.docs.push(staged);
+            }
         }
         Ok(())
     }
@@ -403,6 +419,7 @@ impl MarzBuilder {
     /// Discard the staged documents, keeping the field configuration.
     pub fn clear(&mut self) {
         self.docs.clear();
+        self.index.clear();
     }
 
     /// How many documents are staged and ready to build.
