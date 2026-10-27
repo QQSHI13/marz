@@ -106,10 +106,16 @@ dependents from resolving it, but never deleted or replaced.
 
 ## Cutting a release
 
-1. Bump the version in **two** places — they must agree, and `check-version`
+1. Bump the version in **three** places — they must agree, and `check-version`
    fails the release if they don't:
    - `Cargo.toml` → `[workspace.package]` → `version`
    - `js/package.json` → `version`
+   - `python/pyproject.toml` → `[project]` → `version`
+
+   The Python one is easy to miss: the crate itself inherits the workspace
+   version (`version.workspace = true` in `python/Cargo.toml`), but PyPI reads
+   `pyproject.toml`, which states its own. PyPI never allows a version to be
+   reused, so a stale number here burns it.
 2. Commit, and wait for CI to pass on `main`.
 3. Tag and push:
    ```sh
